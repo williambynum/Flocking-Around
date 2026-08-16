@@ -30,10 +30,21 @@ object ReportBuilder {
     // ==================================================================== HTML
 
     /**
-     * Self-contained report. Images are referenced by relative filename, so the folder works
-     * as a unit — open `report.html` and everything is there.
+     * Self-contained report.
+     *
+     * [shotImageSources] and [planImageSource] are image `src` values, normally `data:` URIs
+     * produced by [ImageEmbedder]. They must not be bare filenames in production: the report
+     * is usually opened through a `content://` URI, against which a relative path cannot
+     * resolve, and every image would render as a broken icon with the files sitting right
+     * beside it. Filenames are only used as a fallback once the embedding budget runs out,
+     * and [embeddingTruncated] then adds a note saying so.
      */
-    fun html(session: SurveySession, shotImageNames: Map<Int, String>, planImageName: String?): String {
+    fun html(
+        session: SurveySession,
+        shotImageSources: Map<Int, String>,
+        planImageSource: String?,
+        embeddingTruncated: Boolean = false,
+    ): String {
         val sb = StringBuilder(64 * 1024)
 
         sb.append("<!doctype html>\n<html lang=\"en\">\n<head>\n")
@@ -73,14 +84,20 @@ object ReportBuilder {
         sb.append("<p class=\"note\">").append(esc(CAPABILITY_NOTE)).append("</p>\n")
         sb.append("</section>\n")
 
+        if (embeddingTruncated) {
+            sb.append("<p class=\"note\">Some images exceeded the inline size budget and are ")
+            sb.append("referenced by filename instead. Those will only display if this file ")
+            sb.append("is opened from inside its own folder.</p>\n")
+        }
+
         // ---- plan view ----
-        if (planImageName != null) {
+        if (planImageSource != null) {
             sb.append("<section>\n<h2>Plan view</h2>\n")
             sb.append("<p class=\"caption\">Top-down. Blue line is the path walked, numbered ")
             sb.append("circles are shot positions with their field of view, dots are located ")
             sb.append("emitters. Rings show position uncertainty; dashed outlines mark ")
             sb.append("positions that were estimated rather than measured.</p>\n")
-            sb.append("<img class=\"plan\" src=\"").append(esc(planImageName))
+            sb.append("<img class=\"plan\" src=\"").append(planImageSource)
                 .append("\" alt=\"Plan view\">\n</section>\n")
         }
 
@@ -95,8 +112,10 @@ object ReportBuilder {
                 .append("%.0f%%".format(shot.depthCoverage * 100))
                 .append("</p>\n")
 
-            shotImageNames[shot.index]?.let {
-                sb.append("<img class=\"shot-img\" src=\"").append(esc(it))
+            shotImageSources[shot.index]?.let {
+                // Not escaped: a data URI is base64 and contains no HTML-significant
+                // characters, and running it through the escaper would corrupt it.
+                sb.append("<img class=\"shot-img\" src=\"").append(it)
                     .append("\" alt=\"Shot ").append(shot.index).append("\">\n")
             }
 

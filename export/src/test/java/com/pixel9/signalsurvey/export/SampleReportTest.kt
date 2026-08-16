@@ -38,8 +38,11 @@ class SampleReportTest {
 
         val html = ReportBuilder.html(
             session,
-            shotImageNames = mapOf(1 to "shot_01.jpg", 2 to "shot_02.jpg"),
-            planImageName = "plan_view.png",
+            shotImageSources = mapOf(
+                1 to placeholder("SHOT 1", "#1b2733"),
+                2 to placeholder("SHOT 2", "#1b2733"),
+            ),
+            planImageSource = placeholder("PLAN VIEW", "#0b0f14"),
         )
         val emitters = ReportBuilder.emittersCsv(session)
         val devices = ReportBuilder.devicesCsv(session)
@@ -79,6 +82,33 @@ class SampleReportTest {
         // CSV must be one header plus one row per emitter.
         val emitterRows = emitters.trim().split("\r\n")
         assertTrue("expected a header and 4 rows", emitterRows.size == 5)
+
+        // Regression guard. The report is opened through a content:// URI in practice, and
+        // a relative src cannot resolve against one — bare filenames render as broken icons
+        // with the files sitting in the same folder.
+        assertTrue("images must be embedded as data URIs", html.contains("src=\"data:image/"))
+        assertFalse("bare filename src leaked in", html.contains("src=\"shot_01.jpg\""))
+        assertFalse("bare filename src leaked in", html.contains("src=\"plan_view.png\""))
+
+        // Escaping must not mangle a data URI's base64 payload.
+        assertFalse("data URI was HTML-escaped", html.contains("data:image/svg+xml;base64,&"))
+    }
+
+    /** A self-describing placeholder so the generated sample looks like the real thing. */
+    private fun placeholder(label: String, background: String): String {
+        val svg = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="900" height="500">
+              <rect width="100%" height="100%" fill="$background"/>
+              <rect x="8" y="8" width="884" height="484" fill="none"
+                    stroke="#2b3947" stroke-width="2" stroke-dasharray="10 8"/>
+              <text x="450" y="240" fill="#5cc8ff" font-family="sans-serif"
+                    font-size="34" font-weight="bold" text-anchor="middle">$label</text>
+              <text x="450" y="286" fill="#8b94a0" font-family="sans-serif"
+                    font-size="18" text-anchor="middle">sample report - synthetic data</text>
+            </svg>
+        """.trimIndent()
+        val encoded = java.util.Base64.getEncoder().encodeToString(svg.toByteArray())
+        return "data:image/svg+xml;base64,$encoded"
     }
 
     // ------------------------------------------------------------------ fixtures

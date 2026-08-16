@@ -63,11 +63,9 @@ class SessionExporter(private val context: Context) {
         val writer = resolveWriter(relativePath, folderName)
         val written = mutableListOf<ExportedFile>()
 
-        // Deterministic names, so the HTML can reference the images before they exist.
         val shotNames = session.shots.associate { it.index to "shot_%02d.jpg".format(it.index) }
-        val planName = planView?.let { PLAN_NAME }
 
-        // ---- images ----
+        // ---- full-resolution images, as separate files ----
         session.shots.forEach { shot ->
             val bitmap = annotatedShots[shot.index] ?: return@forEach
             val name = shotNames.getValue(shot.index)
@@ -81,10 +79,32 @@ class SessionExporter(private val context: Context) {
                 ?.let { written += it }
         }
 
+        // ---- downscaled copies, embedded in the report ----
+        //
+        // The report is normally opened through a content:// URI, against which a relative
+        // src cannot resolve — referencing the sibling files by name renders every image as
+        // a broken icon even though they are right there. Embedding makes report.html work
+        // from any scheme, and survive being mailed or moved on its own. The full-resolution
+        // files above remain for zooming and printing.
+        val budget = ImageEmbedder.Budget()
+        val shotSources = session.shots.mapNotNull { shot ->
+            val bitmap = annotatedShots[shot.index] ?: return@mapNotNull null
+            val source = ImageEmbedder.embedPhoto(bitmap, budget)
+                ?: shotNames.getValue(shot.index)   // budget exhausted: fall back to the file
+            shot.index to source
+        }.toMap()
+
+        val planSource = planView?.let { ImageEmbedder.embedDiagram(it, budget) ?: PLAN_NAME }
+
         // ---- readable renderings ----
         writer.writeText(
             "report.html", "text/html",
-            ReportBuilder.html(session, shotNames, planName),
+            ReportBuilder.html(
+                session = session,
+                shotImageSources = shotSources,
+                planImageSource = planSource,
+                embeddingTruncated = budget.exhausted,
+            ),
         )?.let { written += it }
 
         writer.writeText(
