@@ -45,6 +45,7 @@ class ArSurfaceView @JvmOverloads constructor(
      * frame already in flight when it closes.
      */
     @Volatile private var renderingEnabled = false
+    private var lastDiagMs = 0L
 
     init {
         preserveEGLContextOnPause = true
@@ -77,6 +78,8 @@ class ArSurfaceView @JvmOverloads constructor(
      * SessionPausedException and — on a background thread — takes the process down.
      */
     fun startRendering() {
+        if (renderingEnabled) return   // idempotent: called from both update() and ON_RESUME
+        Log.i(TAG, "startRendering()")
         renderingEnabled = true
         onResume()
     }
@@ -110,9 +113,28 @@ class ArSurfaceView @JvmOverloads constructor(
 
         override fun onDrawFrame(gl: GL10?) {
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-            val s = session ?: return
+
+            // A silently black AR view is very hard to diagnose from the outside, so the two
+            // states that produce one are logged — throttled, because this is the GL thread.
+            val now = android.os.SystemClock.elapsedRealtime()
+            val shouldWarn = now - lastDiagMs > 2000
+
+            val s = session
+            if (s == null) {
+                if (shouldWarn) {
+                    lastDiagMs = now
+                    Log.w(TAG, "no session attached - view will stay black")
+                }
+                return
+            }
             // The session may have been paused between this frame being scheduled and running.
-            if (!renderingEnabled) return
+            if (!renderingEnabled) {
+                if (shouldWarn) {
+                    lastDiagMs = now
+                    Log.w(TAG, "rendering disabled - view will stay black")
+                }
+                return
+            }
 
             if (!textureBound) {
                 s.setCameraTextureName(background.textureId)

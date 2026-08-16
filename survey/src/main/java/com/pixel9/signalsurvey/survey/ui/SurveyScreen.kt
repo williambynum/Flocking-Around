@@ -100,8 +100,13 @@ fun SurveyScreen(
                 val session = viewModel.arController.session
                 if (session != null) {
                     view.attach(session) { s, frame, w, h -> viewModel.onFrame(s, frame, w, h) }
+                    // The session usually arrives after ON_RESUME has already fired, so the
+                    // lifecycle observer alone would never start the renderer. Idempotent.
+                    view.startRendering()
                 }
             },
+            // The only place the view is torn down: when Compose actually discards it.
+            onRelease = { it.detach() },
         )
 
         // The GL thread must be started and stopped in lockstep with the ARCore session, and
@@ -112,26 +117,23 @@ fun SurveyScreen(
         //
         // MainActivity.onResume has already resumed the session by the time ON_RESUME reaches
         // here, so this ordering falls out naturally.
+        // Keyed on the lifecycle owner ONLY. Keying it on surfaceView as well meant the effect
+        // restarted the moment that state went null -> view, and its onDispose detached the
+        // session a frame after rendering began — black screen, no tracking, no error.
+        //
+        // The view is read at event time rather than captured, and teardown of the view itself
+        // belongs to AndroidView's onRelease, not here.
         val lifecycleOwner = LocalLifecycleOwner.current
-        DisposableEffect(lifecycleOwner, surfaceView) {
-            val view = surfaceView
+        DisposableEffect(lifecycleOwner) {
             val observer = LifecycleEventObserver { _, event ->
                 when (event) {
-                    Lifecycle.Event.ON_RESUME -> view?.startRendering()
-                    Lifecycle.Event.ON_PAUSE -> view?.stopRendering()
+                    Lifecycle.Event.ON_RESUME -> surfaceView?.startRendering()
+                    Lifecycle.Event.ON_PAUSE -> surfaceView?.stopRendering()
                     else -> Unit
                 }
             }
             lifecycleOwner.lifecycle.addObserver(observer)
-            // Already resumed when this composable first ran — the event will not fire again.
-            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                view?.startRendering()
-            }
-            onDispose {
-                lifecycleOwner.lifecycle.removeObserver(observer)
-                view?.stopRendering()
-                view?.detach()
-            }
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
         }
 
         LiveDetectionOverlay(state.liveBoxes)

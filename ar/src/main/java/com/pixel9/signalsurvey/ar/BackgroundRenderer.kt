@@ -28,6 +28,9 @@ class BackgroundRenderer {
     private lateinit var quadCoords: FloatBuffer
     private lateinit var quadTexCoords: FloatBuffer
 
+    /** False until ARCore has filled the texture coordinates at least once. */
+    private var texCoordsValid = false
+
     /** Call on the GL thread from onSurfaceCreated. */
     fun createOnGlThread() {
         val textures = IntArray(1)
@@ -42,6 +45,8 @@ class BackgroundRenderer {
 
         quadCoords = allocFloats(QUAD_NDC)
         quadTexCoords = allocFloats(FloatArray(8))
+        // The GL context can be recreated; the old coordinates do not survive it.
+        texCoordsValid = false
 
         val vertex = compile(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER)
         val fragment = compile(GLES20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER)
@@ -63,18 +68,34 @@ class BackgroundRenderer {
         textureUniform = GLES20.glGetUniformLocation(program, "u_Texture")
     }
 
+    /** Diagnostic: all-zero texture coordinates mean the quad samples one texel — a black screen. */
+    fun texCoordSummary(): String {
+        if (!::quadTexCoords.isInitialized) return "uninit"
+        quadTexCoords.position(0)
+        return (0 until 4).joinToString(",") { "%.2f".format(quadTexCoords.get(it)) }
+    }
+
     fun draw(frame: Frame) {
-        // Display geometry changes on rotation or a resize; ARCore recomputes the mapping
-        // from NDC to the (differently oriented, differently cropped) camera texture.
-        if (frame.hasDisplayGeometryChanged()) {
+        if (frame.timestamp == 0L) return   // no camera image yet; drawing would flash
+
+        // Display geometry changes on rotation or a resize; ARCore recomputes the mapping from
+        // NDC to the (differently oriented, differently cropped) camera texture.
+        //
+        // `hasDisplayGeometryChanged()` is true for exactly one frame after setDisplayGeometry,
+        // so any frame skipped for an unrelated reason loses the only chance to populate these.
+        // The buffer starts as zeros, and zeroed texture coordinates sample a single texel —
+        // a perfectly black screen with no error anywhere. The validity flag makes it recover.
+        if (frame.hasDisplayGeometryChanged() || !texCoordsValid) {
+            quadCoords.position(0)
+            quadTexCoords.position(0)
             frame.transformCoordinates2d(
                 Coordinates2d.OPENGL_NORMALIZED_DEVICE_COORDINATES,
                 quadCoords,
                 Coordinates2d.TEXTURE_NORMALIZED,
                 quadTexCoords,
             )
+            texCoordsValid = true
         }
-        if (frame.timestamp == 0L) return   // no camera image yet; drawing would flash
 
         quadCoords.position(0)
         quadTexCoords.position(0)
