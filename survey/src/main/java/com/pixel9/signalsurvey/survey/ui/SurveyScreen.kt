@@ -123,6 +123,28 @@ fun SurveyScreen(
                     Color(0xFFFFA65C),
                 )
             }
+            // Heading only matters for GNSS sky projection, so this is informational,
+            // never blocking. A bad compass costs you satellite markers and nothing else.
+            if (state.needsCompassCalibration) {
+                HintChip(
+                    "Compass uncalibrated - move the phone in a figure of eight to " +
+                        "enable satellite marking",
+                    Color(0xFFFFA65C),
+                )
+            } else {
+                state.heading?.let { heading ->
+                    HintChip(
+                        "Heading %s: +/-%.0f deg from %d samples (%d rejected as distorted)"
+                            .format(
+                                heading.quality,
+                                heading.uncertaintyDeg,
+                                heading.sampleCount,
+                                heading.rejectedCount,
+                            ),
+                        if (heading.uncertaintyDeg < 10f) Color(0xFF7FD4A8) else Color(0xFFFFA65C),
+                    )
+                }
+            }
             state.message?.let { HintChip(it, Color(0xFF7FD4A8)) }
         }
 

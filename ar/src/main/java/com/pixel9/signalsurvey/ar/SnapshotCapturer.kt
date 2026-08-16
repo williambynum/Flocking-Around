@@ -13,6 +13,7 @@ import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.NotYetAvailableException
 import com.pixel9.signalsurvey.model.CameraSnapshot
 import com.pixel9.signalsurvey.model.DepthSnapshot
+import com.pixel9.signalsurvey.model.SkyProjection
 import com.pixel9.signalsurvey.model.Vec3
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteOrder
@@ -48,7 +49,7 @@ class SnapshotCapturer {
         frame: Frame,
         viewWidth: Int,
         viewHeight: Int,
-        trueNorthYawRad: Float?,
+        heading: HeadingSolution?,
     ): FrozenMetadata? {
         val cam = frame.camera
         if (cam.trackingState != TrackingState.TRACKING) return null
@@ -71,7 +72,15 @@ class SnapshotCapturer {
             focalPx = intrinsics.focalLength,
             principalPx = intrinsics.principalPoint,
             horizontalFovDeg = hFovDeg,
-            trueNorthYawRad = trueNorthYawRad,
+            // Only carry a heading the resolver considers usable. A 30-degree heading is
+            // not a weak fact, it is a wrong one, and it would place satellite markers a
+            // third of a frame away from where they are.
+            trueNorthYawRad = heading
+                ?.takeIf { it.uncertaintyRad <= SkyProjection.MAX_USABLE_UNCERTAINTY_RAD }
+                ?.yawRad,
+            trueNorthUncertaintyRad = heading
+                ?.takeIf { it.uncertaintyRad <= SkyProjection.MAX_USABLE_UNCERTAINTY_RAD }
+                ?.uncertaintyRad,
         )
 
         return FrozenMetadata(snapshot, frame.copyDepth(), viewWidth, viewHeight)

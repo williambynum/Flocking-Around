@@ -221,13 +221,56 @@ distinction is how a survey turns into confident nonsense.
 
 Known gaps worth attention before field use:
 
-- **Heading** uses the magnetometer, so GNSS sky projection is ±10–20° indoors. ARCore
-  Geospatial (`session.earth`) would give sub-degree heading but needs an API key and VPS
-  coverage.
 - **BLE address rotation** (~15 min) means long sessions can split one tracker into several
   entries. `RadioObservation.fingerprint` exists for this; the session merger does not use
   it yet.
 - **Trilateration accuracy** is untested against ground truth on real hardware.
+- **Heading outdoors** could be much better with ARCore Geospatial — see below.
+
+---
+
+## Heading
+
+Only one feature needs to know where north is: projecting GNSS satellites onto a shot.
+Trilateration, RSSI localisation, visual anchors, the plan view and every annotation live
+purely in the ARCore world frame and are unaffected by heading error.
+
+A single magnetometer reading indoors is close to worthless — near rebar, a motor or a
+laptop it can be 40° out and perfectly confident about it. `HeadingResolver` addresses that
+three ways:
+
+**Distortion rejection.** `GeomagneticField` says what the field *should* measure here.
+Samples whose magnitude deviates >20%, or whose dip angle deviates >15°, are discarded
+rather than averaged in. The dip test is the sharper of the two — local distortion tilts the
+field out of plane long before it changes the magnitude much.
+
+**Averaging over the walk.** ARCore supplies accurate *relative* orientation, so every
+sample along the arming sweep independently estimates the same fixed offset, and
+position-dependent distortion largely cancels over a few metres. Samples are combined with a
+circular mean and trimmed at 2.5σ. Sampling is gated on movement or rotation so standing
+still cannot manufacture false confidence.
+
+**A measured error bar.** The circular variance of the surviving samples *is* the
+uncertainty — nothing is assumed. That number drives the rendering: satellites are drawn as
+an arc spanning the heading error, not a point; above 15° nothing is projected at all and the
+report says why; the plan view's compass rose shows the uncertainty as a wedge, and reads
+"no heading — orientation is arbitrary" when none was resolved.
+
+The maths lives in `CircularStats` (`:model`) rather than inside the resolver so it can be
+tested on the JVM — angle wrap-around is where this goes wrong silently, and the arithmetic
+mean of 350° and 10° is 180°, pointing exactly backwards.
+
+```bash
+./gradlew :model:testDebugUnitTest
+```
+
+**What is deliberately not used:** ARCore Geospatial. Its sub-degree heading comes from VPS,
+which derives from Street View and therefore exists *outdoors*. Indoors — where the
+magnetometer is worst — it falls back to fusing GPS with this same magnetometer. It is the
+right answer for outdoor surveys where tower bearings matter, and no answer at all for the
+case that actually hurts. If added, gate it with `Session.checkVpsAvailability(lat, lng)`
+and note that `GeospatialPose.getHeading()` is deprecated as of ARCore 1.40 in favour of
+`getEastUpSouthQuaternion()`.
 
 ---
 

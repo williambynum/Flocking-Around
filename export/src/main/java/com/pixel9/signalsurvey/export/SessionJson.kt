@@ -112,6 +112,18 @@ object SessionJson {
         put("principalPx", JSONArray(principalPx.map { round(it) }))
         put("horizontalFovDeg", round(horizontalFovDeg))
         put("trueNorthYawRad", trueNorthYawRad?.let { round(it, 5) } ?: JSONObject.NULL)
+        // Measured, not assumed: the circular variance of the magnetometer samples taken
+        // along the sweep. Null means no usable heading was resolved for this shot, in
+        // which case nothing in it is expressed against true north.
+        put(
+            "trueNorthUncertaintyRad",
+            trueNorthUncertaintyRad?.let { round(it, 5) } ?: JSONObject.NULL,
+        )
+        put(
+            "trueNorthUncertaintyDeg",
+            trueNorthUncertaintyRad?.let { round(Math.toDegrees(it.toDouble()).toFloat(), 2) }
+                ?: JSONObject.NULL,
+        )
     }
 
     private fun VisualTarget.toJson() = JSONObject().apply {

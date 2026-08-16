@@ -10,7 +10,9 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import com.pixel9.signalsurvey.model.RadioFamily
 import com.pixel9.signalsurvey.model.ResolvedEmitter
+import com.pixel9.signalsurvey.model.SatelliteFix
 import com.pixel9.signalsurvey.model.Shot
+import com.pixel9.signalsurvey.model.SkyProjection
 import com.pixel9.signalsurvey.model.VisualTarget
 import kotlin.math.max
 import kotlin.math.min
@@ -53,12 +55,17 @@ class AnnotationRenderer {
         /** Heard but never located — summarised along the bottom edge. */
         unlocated: List<ResolvedEmitter>,
         sessionLabel: String,
+        /** Drawn only when the shot carries a heading the resolver considered usable. */
+        satellites: List<SatelliteFix> = emptyList(),
     ): Bitmap {
         val out = base.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(out)
         val w = out.width
         val h = out.height
         val theme = Theme(w)
+
+        // Satellites go underneath everything: they are context, not the subject.
+        drawSatellites(canvas, shot, satellites, w, h, theme)
 
         // Rails darkened so light text survives a bright wall behind them.
         canvas.drawRect(0f, 0f, w * RAIL_FRACTION, h.toFloat(), theme.scrim)
@@ -337,6 +344,76 @@ class AnnotationRenderer {
         }
     }
 
+    /**
+     * GNSS satellites, placed by azimuth and elevation.
+     *
+     * These are the only emitters in the whole app whose direction is *known* rather than
+     * inferred — the constellation broadcasts it. What is uncertain is where north is, so
+     * each satellite is drawn as an arc spanning the heading's error band rather than a
+     * point. A dot would claim a precision the magnetometer cannot deliver indoors.
+     *
+     * Nothing is drawn at all when the heading was too poor to be usable; the report lists
+     * the satellites in a table instead.
+     */
+    private fun drawSatellites(
+        canvas: Canvas,
+        shot: Shot,
+        satellites: List<SatelliteFix>,
+        w: Int,
+        h: Int,
+        theme: Theme,
+    ) {
+        if (satellites.isEmpty()) return
+        val northYaw = shot.camera.trueNorthYawRad ?: return
+        val uncertainty = shot.camera.trueNorthUncertaintyRad ?: return
+        if (uncertainty > SkyProjection.MAX_USABLE_UNCERTAINTY_RAD) return
+
+        val origin = shot.camera.worldPosition
+        var drawn = 0
+
+        satellites
+            .filter { it.elevationDeg > MIN_SATELLITE_ELEVATION_DEG }
+            .sortedByDescending { it.cn0DbHz }
+            .forEach { satellite ->
+                val centre = SkyProjection.worldPoint(
+                    origin, satellite.azimuthDeg, satellite.elevationDeg, northYaw,
+                )
+                val centrePx = shot.camera.projectToImage(centre, w, h, marginNdc = 0f)
+                    ?: return@forEach
+
+                val arc = SkyProjection.uncertaintyArc(
+                    origin, satellite.azimuthDeg, satellite.elevationDeg, northYaw, uncertainty,
+                ).mapNotNull { shot.camera.projectToImage(it, w, h, marginNdc = 0.4f) }
+
+                if (arc.size >= 2) {
+                    val path = Path().apply {
+                        moveTo(arc.first().x, arc.first().y)
+                        arc.drop(1).forEach { lineTo(it.x, it.y) }
+                    }
+                    canvas.drawPath(path, theme.satelliteArc)
+                }
+
+                canvas.drawCircle(centrePx.x, centrePx.y, theme.satelliteRadius, theme.satelliteDot)
+                canvas.drawText(
+                    "${satellite.constellation} ${satellite.svid}",
+                    centrePx.x + theme.satelliteRadius * 2f,
+                    centrePx.y + theme.satelliteLabelOffset,
+                    theme.satelliteLabel,
+                )
+                drawn++
+            }
+
+        if (drawn > 0) {
+            canvas.drawText(
+                "GNSS positions shown with +/-%.0f deg heading uncertainty"
+                    .format(Math.toDegrees(uncertainty.toDouble())),
+                theme.cardPadding,
+                theme.satelliteNoteBaseline,
+                theme.satelliteLabel,
+            )
+        }
+    }
+
     private fun drawFooter(
         canvas: Canvas,
         shot: Shot,
@@ -362,6 +439,8 @@ class AnnotationRenderer {
         const val MAX_INFERRED_LINES = 3
         const val STRIP_ITEMS = 9
         const val STRIP_COLUMNS = 3
+        /** Below this a satellite is at the horizon, behind buildings, and not worth drawing. */
+        const val MIN_SATELLITE_ELEVATION_DEG = 10f
     }
 }
 
@@ -433,6 +512,19 @@ private class Theme(imageWidth: Int) {
         style = Paint.Style.STROKE
         strokeWidth = 2f * unit
         color = 0xFF0B0F14.toInt()
+    }
+
+    val satelliteRadius = 5f * unit
+    val satelliteLabelOffset = 5f * unit
+    val satelliteNoteBaseline = 24f * unit
+    val satelliteDot = Paint().apply { isAntiAlias = true; color = 0xFFFFE066.toInt() }
+    val satelliteLabel = paint(12f, 0xCCFFE066.toInt())
+    val satelliteArc = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * unit
+        strokeCap = Paint.Cap.ROUND
+        color = 0x66FFE066
     }
 
     val measuredDot = Paint().apply { isAntiAlias = true; color = 0xFF7FD4A8.toInt() }

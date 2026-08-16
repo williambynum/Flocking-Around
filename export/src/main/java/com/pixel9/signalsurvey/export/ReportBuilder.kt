@@ -171,6 +171,25 @@ object ReportBuilder {
             sb.append("<section>\n<h2>GNSS satellites in view</h2>\n")
             sb.append("<p class=\"caption\">The Pixel 9 is dual-frequency, so most satellites ")
             sb.append("appear twice &mdash; once on L1 (1575 MHz) and once on L5 (1176 MHz).</p>\n")
+
+            // Satellite direction is broadcast and therefore exact. What is uncertain is
+            // where north is, so the report says so rather than letting the reader assume.
+            val uncertainty = session.shots.firstNotNullOfOrNull {
+                it.camera.trueNorthUncertaintyRad
+            }
+            if (uncertainty != null) {
+                sb.append("<p class=\"caption\">Satellites are marked on the shots with a ")
+                sb.append("&plusmn;").append("%.0f".format(Math.toDegrees(uncertainty.toDouble())))
+                sb.append("&deg; arc &mdash; the measured uncertainty in where north is. ")
+                sb.append("Their azimuth and elevation below are broadcast by the ")
+                sb.append("constellation and are exact.</p>\n")
+            } else {
+                sb.append("<p class=\"caption\"><strong>Not marked on the shots.</strong> ")
+                sb.append("No usable compass heading was resolved during this survey, so the ")
+                sb.append("app cannot say which way these directions point relative to the ")
+                sb.append("photographs. The azimuths below are still correct relative to ")
+                sb.append("true north.</p>\n")
+            }
             sb.append("<div class=\"scroll\"><table>\n<thead><tr>")
             listOf("Constellation", "SV", "Band", "C/N0", "Azimuth", "Elevation", "Used in fix")
                 .forEach { sb.append("<th>").append(it).append("</th>") }
@@ -393,6 +412,16 @@ object ReportBuilder {
         sb.append("Device    : ").append(session.deviceProfile).append('\n')
         sb.append("Walked    : ").append("%.1f m".format(session.pathLengthM())).append('\n')
         sb.append("Shots     : ").append(session.shots.size).append('\n')
+        val headingUncertainty = session.shots.firstNotNullOfOrNull {
+            it.camera.trueNorthUncertaintyRad
+        }
+        sb.append("Heading   : ").append(
+            if (headingUncertainty != null) {
+                "resolved, +/-%.0f deg".format(Math.toDegrees(headingUncertainty.toDouble()))
+            } else {
+                "not resolved - directions are relative to the shots, not to north"
+            }
+        ).append('\n')
         sb.append("Heard     : ").append(session.observations.size).append(" distinct emitters\n")
         sb.append("Located   : ").append(session.locatedEmitters.size).append('\n')
         session.location?.let {

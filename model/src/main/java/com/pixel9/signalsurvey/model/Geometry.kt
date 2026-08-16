@@ -75,6 +75,15 @@ class CameraSnapshot(
      * not be established, which disables GNSS sky projection but nothing else.
      */
     val trueNorthYawRad: Float?,
+    /**
+     * 1-sigma uncertainty on [trueNorthYawRad], radians, measured rather than assumed — see
+     * HeadingResolver. Null when no heading was resolved.
+     *
+     * Carried this far because a heading is useless without it: at 20 degrees of error a
+     * satellite marker is off by a fifth of the frame, and drawing it as a confident point
+     * would be a lie the photograph then carries around on its own.
+     */
+    val trueNorthUncertaintyRad: Float? = null,
 ) {
 
     private val viewProj: FloatArray = FloatArray(16).also {
@@ -156,6 +165,80 @@ data class Geometry(
     /** Positive is above frame centre. */
     val elevationDeg: Float,
 )
+
+/**
+ * Places things given as a compass bearing and an elevation — GNSS satellites, principally —
+ * into the ARCore world frame.
+ *
+ * Lives in :model rather than :ar because both the capture side and the report renderer need
+ * it, and it is pure trigonometry with no ARCore dependency.
+ */
+object SkyProjection {
+
+    /** Satellites are effectively at infinity; far enough that parallax is irrelevant. */
+    const val SKY_RANGE_M = 1_000f
+
+    /**
+     * Above this much heading uncertainty a satellite marker is worse than no marker: at
+     * 15 degrees the error is already a sixth of a typical frame width, so the report lists
+     * the satellites instead of pretending to place them.
+     */
+    const val MAX_USABLE_UNCERTAINTY_RAD = 0.262f   // 15 degrees
+
+    /**
+     * Direction in the ARCore world frame of a point at the given true-north azimuth and
+     * elevation.
+     *
+     * @param trueNorthYawRad offset that converts an ARCore world yaw into a true bearing.
+     */
+    fun directionToWorld(
+        azimuthDegFromNorth: Float,
+        elevationDeg: Float,
+        trueNorthYawRad: Float,
+    ): Vec3 {
+        val trueBearing = Math.toRadians(azimuthDegFromNorth.toDouble()).toFloat()
+        val worldYaw = trueBearing - trueNorthYawRad
+        val el = Math.toRadians(elevationDeg.toDouble()).toFloat()
+        return Vec3(
+            x = kotlin.math.sin(worldYaw) * kotlin.math.cos(el),
+            y = kotlin.math.sin(el),
+            z = -kotlin.math.cos(worldYaw) * kotlin.math.cos(el),
+        ).normalized()
+    }
+
+    /** World-space point for a sky object, relative to a camera position. */
+    fun worldPoint(
+        origin: Vec3,
+        azimuthDegFromNorth: Float,
+        elevationDeg: Float,
+        trueNorthYawRad: Float,
+        rangeM: Float = SKY_RANGE_M,
+    ): Vec3 = origin + directionToWorld(azimuthDegFromNorth, elevationDeg, trueNorthYawRad) * rangeM
+
+    /**
+     * The locus a sky object sweeps as the heading is varied across its uncertainty band.
+     * Drawn as an arc, which is the honest rendering of "somewhere along here".
+     */
+    fun uncertaintyArc(
+        origin: Vec3,
+        azimuthDegFromNorth: Float,
+        elevationDeg: Float,
+        trueNorthYawRad: Float,
+        uncertaintyRad: Float,
+        steps: Int = 9,
+    ): List<Vec3> {
+        val spanDeg = Math.toDegrees(uncertaintyRad.toDouble()).toFloat()
+        return (0 until steps).map { i ->
+            val t = i / (steps - 1f) * 2f - 1f          // -1 .. +1
+            worldPoint(
+                origin,
+                azimuthDegFromNorth + t * spanDeg,
+                elevationDeg,
+                trueNorthYawRad,
+            )
+        }
+    }
+}
 
 /**
  * ARCore's depth map, copied out of the pooled [android.media.Image].

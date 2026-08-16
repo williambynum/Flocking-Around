@@ -51,12 +51,79 @@ class PlanViewRenderer {
         drawEmitters(canvas, session, projection, theme)
         drawLegend(canvas, session, theme, sizePx)
         drawScaleBar(canvas, projection, theme, sizePx)
+        drawCompass(canvas, session, theme, sizePx)
         return bitmap
+    }
+
+    /**
+     * Compass rose, drawn only when a heading was actually resolved.
+     *
+     * The wedge is the heading's 1-sigma uncertainty, so a survey taken next to a steel
+     * staircase shows a fat wedge and one taken in a wooden house shows a thin one. Drawing
+     * a crisp north arrow in both cases would be the easy lie.
+     */
+    private fun drawCompass(canvas: Canvas, session: SurveySession, theme: PlanTheme, size: Int) {
+        val northYaw = session.shots.firstNotNullOfOrNull { it.camera.trueNorthYawRad }
+        val uncertainty = session.shots.firstNotNullOfOrNull { it.camera.trueNorthUncertaintyRad }
+
+        val cx = size - theme.margin * 0.75f
+        val cy = theme.margin * 0.9f
+        val radius = theme.margin * 0.42f
+
+        if (northYaw == null) {
+            canvas.drawCircle(cx, cy, radius, theme.compassRing)
+            canvas.drawText("no heading", cx, cy + theme.compassLabelOffset, theme.compassUnknown)
+            canvas.drawText(
+                "orientation is arbitrary",
+                cx, cy + theme.compassLabelOffset + theme.compassSubGap, theme.compassUnknown,
+            )
+            return
+        }
+
+        // North in world yaw terms: worldYaw = trueBearing - offset, with trueBearing = 0.
+        val worldYawOfNorth = -northYaw
+        // Canvas up is world -Z, and screen Y grows downward.
+        val dx = sin(worldYawOfNorth.toDouble()).toFloat()
+        val dy = cos(worldYawOfNorth.toDouble()).toFloat()
+
+        uncertainty?.let { sigma ->
+            val wedge = Path().apply {
+                moveTo(cx, cy)
+                val steps = 12
+                for (i in 0..steps) {
+                    val t = i / steps.toFloat() * 2f - 1f
+                    val a = worldYawOfNorth + t * sigma
+                    lineTo(cx + sin(a.toDouble()).toFloat() * radius,
+                        cy + cos(a.toDouble()).toFloat() * radius)
+                }
+                close()
+            }
+            canvas.drawPath(wedge, theme.compassWedge)
+        }
+
+        canvas.drawCircle(cx, cy, radius, theme.compassRing)
+        canvas.drawLine(cx, cy, cx + dx * radius, cy + dy * radius, theme.compassNeedle)
+        canvas.drawText("N", cx + dx * radius * 1.28f, cy + dy * radius * 1.28f + theme.tick,
+            theme.compassLetter)
+
+        uncertainty?.let {
+            canvas.drawText(
+                "+/-%.0f deg".format(Math.toDegrees(it.toDouble())),
+                cx, cy + radius + theme.compassLabelOffset, theme.compassUnknown,
+            )
+        }
     }
 
     // --------------------------------------------------------------- projection
 
-    /** World X-Z to canvas pixels, uniform scale, north-up is world -Z. */
+    /**
+     * World X-Z to canvas pixels, uniform scale.
+     *
+     * Up on the canvas is world -Z, which is wherever the camera happened to be pointing
+     * when the AR session started — *not* north. A compass rose is drawn separately when a
+     * heading was resolved; without one, the plan has no absolute orientation and does not
+     * pretend otherwise.
+     */
     private class Projection(points: List<Vec3>, canvasSize: Int, margin: Float) {
         private val minX = points.minOf { it.x }
         private val maxX = points.maxOf { it.x }
@@ -300,6 +367,24 @@ private class PlanTheme(canvasSize: Int) {
         strokeWidth = 3f * unit
         color = 0xFFB9C4D0.toInt()
     }
+
+    val compassLabelOffset = 26f * unit
+    val compassSubGap = 24f * unit
+    val compassRing = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * unit
+        color = 0x44FFFFFF
+    }
+    val compassWedge = Paint().apply { isAntiAlias = true; color = 0x33FFE066 }
+    val compassNeedle = Paint().apply {
+        isAntiAlias = true
+        strokeWidth = 4f * unit
+        strokeCap = Paint.Cap.ROUND
+        color = 0xFFFFE066.toInt()
+    }
+    val compassLetter = paint(24f, 0xFFFFE066.toInt(), bold = true, center = true)
+    val compassUnknown = paint(18f, 0xFF8B94A0.toInt(), center = true)
 
     fun errorRing(color: Int) = Paint().apply {
         isAntiAlias = true

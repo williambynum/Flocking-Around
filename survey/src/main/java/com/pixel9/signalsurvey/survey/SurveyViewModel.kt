@@ -18,6 +18,7 @@ import com.google.ar.core.exceptions.NotYetAvailableException
 import com.pixel9.signalsurvey.ar.ArSessionController
 import com.pixel9.signalsurvey.ar.FrozenMetadata
 import com.pixel9.signalsurvey.ar.HeadingResolver
+import com.pixel9.signalsurvey.ar.HeadingSolution
 import com.pixel9.signalsurvey.ar.SnapshotCapturer
 import com.pixel9.signalsurvey.export.AnnotationRenderer
 import com.pixel9.signalsurvey.export.ExportResult
@@ -92,6 +93,9 @@ data class SurveyUiState(
     val exportResult: ExportResult? = null,
     val trilaterationReady: Int = 0,
     val hasClassifierModel: Boolean = false,
+    /** Null until enough clean magnetometer samples have accumulated along the sweep. */
+    val heading: HeadingSolution? = null,
+    val needsCompassCalibration: Boolean = false,
 )
 
 class SurveyViewModel(app: Application) : AndroidViewModel(app) {
@@ -132,11 +136,28 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
     private var lastInferenceMs = 0L
     private var lastDepthSampleMs = 0L
 
+    /**
+     * Refreshed off the frame loop. The heading resolver needs it for magnetic declination
+     * and for the expected field strength that drives distortion rejection; without it the
+     * result is magnetic north, which is up to ~20 degrees off depending where you stand.
+     */
+    @Volatile private var cachedLocation: com.pixel9.signalsurvey.model.GeoFix? = null
+
     init {
         _uiState.value = _uiState.value.copy(hasClassifierModel = detector.hasCustomModel)
         viewModelScope.launch {
             radioHub.summary.collect { summary ->
                 _uiState.value = _uiState.value.copy(summary = summary)
+            }
+        }
+        viewModelScope.launch {
+            while (true) {
+                cachedLocation = radioHub.gnss.lastKnownLocation()
+                _uiState.value = _uiState.value.copy(
+                    heading = heading.solution(),
+                    needsCompassCalibration = heading.needsCalibration,
+                )
+                kotlinx.coroutines.delay(LOCATION_REFRESH_MS)
             }
         }
     }
@@ -194,6 +215,9 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
         annotatedShots.values.forEach { it.recycle() }
         annotatedShots.clear()
         radioHub.reset()
+        // Heading is per-session: the world frame it is expressed against is recreated
+        // whenever the AR session restarts, so carrying the old offset over would be wrong.
+        heading.reset()
         builder = SurveySessionBuilder(label, radioHub.capabilities.describe())
         _uiState.value = _uiState.value.copy(
             phase = SurveyPhase.ARMING,
@@ -303,6 +327,7 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
                         visibleEmitters = visible,
                         unlocated = SessionResolver.unlocatedFor(session).take(24),
                         sessionLabel = session.label,
+                        satellites = session.satellites,
                     )
                     base.recycle()
                     shot.index to annotated
@@ -358,12 +383,19 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
 
         cacheImageToViewTransform(frame)
 
-        if (captureRequested.get() && tracking) {
-            val northYaw = heading.worldToTrueNorthYawRad(
+        // Feed the heading resolver. It self-throttles on movement and rotation, so calling
+        // every frame is cheap and the sweep the operator is already doing for depth
+        // doubles as the magnetic survey.
+        if (tracking) {
+            heading.recordSample(
                 cameraForward = forwardOf(frame),
-                location = null,
+                cameraPosition = Vec3.of(camera.pose.translation),
+                location = cachedLocation,
             )
-            val metadata = capturer.grabMetadata(frame, viewWidth, viewHeight, northYaw)
+        }
+
+        if (captureRequested.get() && tracking) {
+            val metadata = capturer.grabMetadata(frame, viewWidth, viewHeight, heading.solution())
             if (metadata != null) {
                 lastDepthCoverage = metadata.depth?.coverage() ?: lastDepthCoverage
                 pendingMetadata = metadata
@@ -498,6 +530,7 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val TAG = "SurveyViewModel"
         const val INFERENCE_INTERVAL_MS = 120L
+        const val LOCATION_REFRESH_MS = 3_000L
         /** The readiness gauge does not need to be recomputed at frame rate. */
         const val DEPTH_SAMPLE_INTERVAL_MS = 500L
         /** Sampling every Nth depth pixel is plenty for a coverage percentage. */
