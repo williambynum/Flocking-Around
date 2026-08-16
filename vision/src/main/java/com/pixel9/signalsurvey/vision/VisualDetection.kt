@@ -15,6 +15,13 @@ data class VisualDetection(
     val label: String,
     val confidence: Float,
     val boxImagePx: Rect,
+    /**
+     * Set when the generic labeller named something the ontology has no entry for — a real
+     * observation ("Bookcase") that carries no RF expectations. Beats discarding it.
+     */
+    val displayNameOverride: String? = null,
+    /** The labeller's own wording, kept so the identification stays auditable in the export. */
+    val rawLabel: String? = null,
 )
 
 /**

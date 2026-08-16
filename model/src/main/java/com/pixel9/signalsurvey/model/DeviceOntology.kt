@@ -304,6 +304,97 @@ object DeviceOntology {
             ),
         ),
 
+        // --- Classes a generic image labeller can actually reach ------------------
+        //
+        // Everything above needs a trained classifier to identify. These are the ones ML Kit's
+        // ~400-label model surfaces on its own, so they are what the app can name with no
+        // model bundled. Their priors are correspondingly hedged: "a monitor" says much less
+        // about what is on the air than "a Nest Wifi Pro" does.
+
+        DeviceClassProfile(
+            label = "display_screen",
+            displayName = "Display / Monitor",
+            expectations = listOf(
+                e(SignalCatalog.WIFI_STA, 0.30f, "Only if it is a smart display rather than a plain monitor"),
+                e(SignalCatalog.BLE, 0.35f, "Increasingly common for remotes and pairing"),
+                e(SignalCatalog.BT_CLASSIC, 0.25f),
+                e(SignalCatalog.PROPRIETARY_24, 0.20f, "Wireless display links - not verifiable"),
+            ),
+            mdnsTypes = listOf("_googlecast._tcp", "_airplay._tcp"),
+        ),
+
+        DeviceClassProfile(
+            label = "desktop_computer",
+            displayName = "Desktop Computer / Server",
+            expectations = listOf(
+                e(SignalCatalog.WIFI_STA, 0.70f, "Often wired instead - absence of Wi-Fi means little here"),
+                e(SignalCatalog.BLE, 0.75f),
+                e(SignalCatalog.BT_CLASSIC, 0.70f),
+                e(SignalCatalog.PROPRIETARY_24, 0.45f, "USB dongle keyboard and mouse links"),
+            ),
+            btClassMajor = MAJOR_COMPUTER,
+            mdnsTypes = listOf("_ssh._tcp", "_smb._tcp", "_workstation._tcp"),
+        ),
+
+        DeviceClassProfile(
+            label = "headphones",
+            displayName = "Headphones / Headset",
+            expectations = listOf(
+                e(SignalCatalog.BLE, 0.90f, "Pairing and battery reporting"),
+                e(SignalCatalog.BT_CLASSIC, 0.85f, "A2DP audio - the actual audio link"),
+                e(SignalCatalog.AURACAST, 0.20f, "LE Audio receivers on 2024+ hardware"),
+                e(SignalCatalog.PROPRIETARY_24, 0.15f, "Some wireless headsets use a proprietary dongle"),
+            ),
+            btClassMajor = MAJOR_AUDIO_VIDEO,
+            bleCompanyIds = listOf(0x004C, 0x0075, 0x00E0, 0x0180, 0x0118),
+        ),
+
+        DeviceClassProfile(
+            label = "peripheral",
+            displayName = "Keyboard / Mouse / Controller",
+            expectations = listOf(
+                e(SignalCatalog.BLE, 0.70f, "BLE HID"),
+                e(SignalCatalog.PROPRIETARY_24, 0.60f, "Logitech Unifying and similar dongles - not verifiable"),
+                e(SignalCatalog.BT_CLASSIC, 0.35f),
+            ),
+            btClassMajor = MAJOR_PERIPHERAL,
+            bleServiceUuids = listOf("00001812-0000-1000-8000-00805f9b34fb"),
+        ),
+
+        DeviceClassProfile(
+            label = "camera_device",
+            displayName = "Camera",
+            expectations = listOf(
+                e(SignalCatalog.WIFI_STA, 0.55f, "Network camera, or a stills camera with Wi-Fi transfer"),
+                e(SignalCatalog.WIFI_DIRECT, 0.30f, "Consumer cameras often expose a soft AP - that IS scannable"),
+                e(SignalCatalog.BLE, 0.55f, "Pairing and geotagging"),
+                e(SignalCatalog.INFRARED, 0.35f, "Night-vision illuminator on security models"),
+            ),
+            mdnsTypes = listOf("_rtsp._tcp", "_onvif._tcp"),
+        ),
+
+        DeviceClassProfile(
+            label = "major_appliance",
+            displayName = "Major Appliance",
+            expectations = listOf(
+                e(SignalCatalog.WIFI_STA, 0.45f, "Only on connected models"),
+                e(SignalCatalog.BLE, 0.40f, "Commissioning"),
+                e(SignalCatalog.ZIGBEE, 0.15f, "Not verifiable"),
+                e(SignalCatalog.NFC, 0.15f, "Tap-to-pair on some models"),
+            ),
+            mdnsTypes = listOf("_matter._tcp"),
+        ),
+
+        DeviceClassProfile(
+            label = "remote_control",
+            displayName = "Remote Control",
+            expectations = listOf(
+                e(SignalCatalog.INFRARED, 0.75f, "No IR receiver on this phone - never verifiable"),
+                e(SignalCatalog.BLE, 0.55f, "Voice remotes are BLE"),
+                e(SignalCatalog.PROPRIETARY_24, 0.30f),
+            ),
+        ),
+
         DeviceClassProfile(
             label = "antenna_mast",
             displayName = "Antenna / Mast (unclassified)",

@@ -17,6 +17,9 @@ arcore = "1.48.0"
 # object-detection-custom adds LocalModel (bring-your-own TFLite classifier).
 mlkitObjectDetection = "17.0.2"
 mlkitObjectDetectionCustom = "17.0.2"
+# Separate API from object detection: ~400 generic labels (Television, Loudspeaker,
+# Laptop, Printer...). On-device, no training, no network.
+mlkitImageLabeling = "17.0.9"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -41,6 +44,7 @@ arcore = { module = "com.google.ar:core", version.ref = "arcore" }
 # libs.mlkit.object.detection fails to compile in a .kts build script.
 mlkit-objectdetection = { module = "com.google.mlkit:object-detection", version.ref = "mlkitObjectDetection" }
 mlkit-objectdetection-custom = { module = "com.google.mlkit:object-detection-custom", version.ref = "mlkitObjectDetectionCustom" }
+mlkit-imagelabeling = { module = "com.google.mlkit:image-labeling", version.ref = "mlkitImageLabeling" }
 
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
 

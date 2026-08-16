@@ -18,6 +18,7 @@ dependencies {
     api(project(":model"))
     implementation(libs.mlkit.objectdetection)
     implementation(libs.mlkit.objectdetection.custom)
+    implementation(libs.mlkit.imagelabeling)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
 }

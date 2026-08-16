@@ -153,6 +153,7 @@ class CaptureOrchestrator(
                         rangeSource = source,
                         camera = metadata.camera,
                         shotIndex = shotIndex,
+                        displayNameOverride = detection.displayNameOverride,
                     ),
                     observations,
                 )

@@ -118,9 +118,10 @@ fun SurveyScreen(
             SpectrumHud(state.summary.perFamily, state.summary.rttCapableAps)
             if (!state.hasClassifierModel) {
                 HintChip(
-                    "No classifier model bundled - detections are unlabelled. " +
-                        "Drop device_classifier.tflite into app/src/main/assets.",
-                    Color(0xFFFFA65C),
+                    "Generic labelling: devices are named on capture (monitor, speaker, " +
+                        "laptop...). Add device_classifier.tflite to assets for RF-specific " +
+                        "classes like routers and access points.",
+                    Color(0xFF5CC8FF),
                 )
             }
             // Heading only matters for GNSS sky projection, so this is informational,

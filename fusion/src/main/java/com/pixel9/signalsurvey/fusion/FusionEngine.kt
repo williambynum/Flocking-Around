@@ -25,6 +25,8 @@ data class FusionRequest(
     val rangeSource: RangeSource,
     val camera: CameraSnapshot,
     val shotIndex: Int,
+    /** From the generic labeller when the ontology has no entry for [label]. */
+    val displayNameOverride: String? = null,
 )
 
 /**
@@ -52,13 +54,16 @@ class FusionEngine(
         val geometry = request.camera.geometryTo(request.anchorWorld)
 
         if (profile == null) {
-            // Unknown class: still emit the target with nothing confirmed. Better an
-            // un-annotated marker than a confident guess about a device we cannot name.
+            // No ontology entry. The object may still have been named by the generic labeller
+            // ("Bookcase"), which is worth showing — it just carries no RF expectations, so
+            // nothing is confirmed or inferred against it. Better an honestly bare marker
+            // than a confident guess about a device we cannot name.
             return VisualTarget(
                 id = request.targetId,
                 trackingId = request.trackingId,
                 label = request.label,
-                displayName = request.label.replace('_', ' ').replaceFirstChar { it.uppercase() },
+                displayName = request.displayNameOverride
+                    ?: request.label.replace('_', ' ').replaceFirstChar { it.uppercase() },
                 visualConfidence = request.visualConfidence,
                 boxImagePx = request.boxImagePx,
                 anchorWorld = request.anchorWorld,
