@@ -9,6 +9,7 @@ import android.view.Display
 import com.google.ar.core.Frame
 import com.google.ar.core.Session
 import com.google.ar.core.exceptions.CameraNotAvailableException
+import com.google.ar.core.exceptions.SessionPausedException
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -38,6 +39,13 @@ class ArSurfaceView @JvmOverloads constructor(
     private var displayRotation = 0
     private var geometryDirty = true
 
+    /**
+     * Gate on the GL thread. Volatile because it is flipped from the main thread while the GL
+     * thread may be mid-frame — the flag closes the window, and the catch below covers the
+     * frame already in flight when it closes.
+     */
+    @Volatile private var renderingEnabled = false
+
     init {
         preserveEGLContextOnPause = true
         setEGLContextClientVersion(2)
@@ -55,8 +63,28 @@ class ArSurfaceView @JvmOverloads constructor(
     }
 
     fun detach() {
+        renderingEnabled = false
         session = null
         frameListener = null
+    }
+
+    /**
+     * Start drawing. Call only *after* the ARCore session has been resumed.
+     *
+     * Order matters and is not symmetric: ARCore requires the session to be live before the GL
+     * surface starts drawing, and the surface to stop before the session is paused. Getting it
+     * backwards means the GL thread calls update() on a paused session, which throws
+     * SessionPausedException and — on a background thread — takes the process down.
+     */
+    fun startRendering() {
+        renderingEnabled = true
+        onResume()
+    }
+
+    /** Stop drawing. Call *before* pausing the ARCore session. */
+    fun stopRendering() {
+        renderingEnabled = false
+        onPause()
     }
 
     /** Call from onResume and on configuration change. */
@@ -83,6 +111,8 @@ class ArSurfaceView @JvmOverloads constructor(
         override fun onDrawFrame(gl: GL10?) {
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
             val s = session ?: return
+            // The session may have been paused between this frame being scheduled and running.
+            if (!renderingEnabled) return
 
             if (!textureBound) {
                 s.setCameraTextureName(background.textureId)
@@ -97,6 +127,15 @@ class ArSurfaceView @JvmOverloads constructor(
                 s.update()
             } catch (e: CameraNotAvailableException) {
                 Log.w(TAG, "Camera unavailable during update", e)
+                return
+            } catch (e: SessionPausedException) {
+                // Lost the race: the session was paused after this frame was scheduled. Normal
+                // during a lifecycle transition, and skipping the frame is the whole response.
+                return
+            } catch (e: Throwable) {
+                // This runs on the GL thread, where an escaping exception is a process death
+                // rather than a caught error. No single frame is worth that.
+                Log.e(TAG, "Session update failed; skipping frame", e)
                 return
             }
 

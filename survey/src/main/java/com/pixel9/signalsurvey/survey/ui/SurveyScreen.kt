@@ -52,6 +52,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pixel9.signalsurvey.ar.ArSurfaceView
 import com.pixel9.signalsurvey.model.RadioFamily
@@ -101,8 +104,34 @@ fun SurveyScreen(
             },
         )
 
-        DisposableEffect(Unit) {
-            onDispose { surfaceView?.detach() }
+        // The GL thread must be started and stopped in lockstep with the ARCore session, and
+        // in the right order: session resumed before the surface draws, surface stopped before
+        // the session pauses. Without this the GL thread keeps calling update() after the
+        // activity pauses and ARCore throws SessionPausedException on a background thread,
+        // which is a process death rather than a caught error.
+        //
+        // MainActivity.onResume has already resumed the session by the time ON_RESUME reaches
+        // here, so this ordering falls out naturally.
+        val lifecycleOwner = LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner, surfaceView) {
+            val view = surfaceView
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> view?.startRendering()
+                    Lifecycle.Event.ON_PAUSE -> view?.stopRendering()
+                    else -> Unit
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            // Already resumed when this composable first ran — the event will not fire again.
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                view?.startRendering()
+            }
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                view?.stopRendering()
+                view?.detach()
+            }
         }
 
         LiveDetectionOverlay(state.liveBoxes)
