@@ -126,9 +126,13 @@ minSdk 33 is the floor for `NEARBY_WIFI_DEVICES`, `ScanResult.getWifiSsid()` and
 `WIFI_STANDARD_11BE`. Target hardware runs Android 14/15, so going lower buys nothing and
 costs a great deal of version branching.
 
-The debug APK is ~104 MB, almost entirely ML Kit's bundled detection model and ARCore
-natives. A release build with `isMinifyEnabled = true` and ABI splits (`arm64-v8a` only)
-brings that down substantially.
+| Build | arm64-v8a | Why |
+|---|---:|---|
+| `assembleDebug` | ~104 MB | No minification. The Anthropic SDK's Jackson dependency alone is ~28 MB of unstripped dex |
+| `assembleRelease` | **~37 MB** | R8 strips it; `isMinifyEnabled` is on for release |
+
+R8 is not optional here — without it the Jackson dependency dominates the APK. The release
+build is unsigned as configured; add a signing config to install it.
 
 ### While developing
 
@@ -140,6 +144,44 @@ adb shell settings put global wifi_scan_throttle_enabled 0
 ```
 
 ---
+
+## Identification: three tiers
+
+| Tier | Names | Where | Cost |
+|---|---|---|---|
+| **Generic labeller** (default) | Television, Loudspeaker, Laptop, Printer, Camera… | on-device | free |
+| **Custom TFLite classifier** (optional) | `wireless_router`, `ceiling_access_point`, … | on-device | training effort |
+| **Cloud vision** (opt-in, off) | "Wi-Fi router, three external antennas" | **uploads images** | ~2¢/shot |
+
+`LabelMapper` translates the generic vocabulary into the ontology by normalised substring, not
+exact string — the labeller's wording shifts between model versions, and pinning exact strings
+means an update silently stops matching. Labels it cannot map are still shown under their own
+name; an unmapped "Bookcase" is a real observation with no RF profile, which beats discarding it.
+
+Every device carries an `IdentificationSource` through to the annotations, the CSV, and the
+JSON, so a reader can always tell which names came off the device and which did not.
+
+### Cloud identification (opt-in)
+
+**Off by default. Nothing is uploaded unless you turn it on and supply your own API key.**
+
+The generic labeller names a *category*; a vision model can often name the *device*, which is
+what makes the RF profiles specific — a router and a set top box are the same rectangle to a
+generic labeller. Enable it under the chip in the top-left of the capture screen.
+
+- Uploads downscaled images only: the full frame plus up to six crops per shot. **No RF data,
+  MAC addresses, location or survey results are ever sent.**
+- Runs *after* the on-device pass, so a network failure degrades to on-device labels rather
+  than to nothing, and never blocks the shutter.
+- Uses `claude-opus-5` at low effort — roughly 2¢ per shot.
+- The key is stored in `EncryptedSharedPreferences` behind the Android Keystore. If the
+  Keystore is unavailable the feature stays **off** rather than falling back to plaintext.
+- The toggle is inert until you have read the disclosure. That ordering is deliberate.
+
+> **Android note:** the Anthropic Java SDK's `addTool(Class<T>)` schema generator reaches for
+> `java.lang.reflect.AnnotatedType`, which does not exist on Android. This app never calls it,
+> so the code is unreachable and suppressed in `proguard-rules.pro` — but anyone adding tool
+> use here must build the schema by hand.
 
 ## Bring your own classifier
 

@@ -107,6 +107,17 @@ fun SurveyScreen(
 
         LiveDetectionOverlay(state.liveBoxes)
 
+        if (state.cloud.settingsOpen) {
+            CloudSettingsSheet(
+                state = state.cloud,
+                onAcceptDisclosure = { viewModel.acceptCloudDisclosure() },
+                onSetApiKey = { viewModel.setCloudApiKey(it) },
+                onSetEnabled = { viewModel.setCloudEnabled(it) },
+                onForgetKey = { viewModel.forgetCloudKey() },
+                onDismiss = { viewModel.closeCloudSettings() },
+            )
+        }
+
         // ---- top HUD ----
         Column(
             Modifier
@@ -146,6 +157,12 @@ fun SurveyScreen(
                     )
                 }
             }
+            HintChip(
+                if (state.cloud.enabled) "Cloud identification ON - shots are uploaded"
+                else "Cloud identification off - tap to review",
+                if (state.cloud.enabled) Color(0xFFFFA65C) else Color(0xFF8B94A0),
+                onClick = { viewModel.openCloudSettings() },
+            )
             state.message?.let { HintChip(it, Color(0xFF7FD4A8)) }
         }
 
@@ -400,8 +417,12 @@ private fun ShotFilmstrip(count: Int, thumbnail: (Int) -> android.graphics.Bitma
 }
 
 @Composable
-private fun HintChip(text: String, accent: Color) {
-    Surface(color = Color(0xCC0B0F14), shape = RoundedCornerShape(10.dp)) {
+private fun HintChip(text: String, accent: Color, onClick: (() -> Unit)? = null) {
+    Surface(
+        color = Color(0xCC0B0F14),
+        shape = RoundedCornerShape(10.dp),
+        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
+    ) {
         Row(
             Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,

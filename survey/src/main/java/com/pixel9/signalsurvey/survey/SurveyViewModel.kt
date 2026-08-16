@@ -33,6 +33,8 @@ import com.pixel9.signalsurvey.radio.RadioHub
 import com.pixel9.signalsurvey.vision.DeviceDetector
 import com.pixel9.signalsurvey.vision.RotationMapping
 import com.pixel9.signalsurvey.vision.StillImageClassifier
+import com.pixel9.signalsurvey.vision.cloud.CloudVisionEnricher
+import com.pixel9.signalsurvey.vision.cloud.CloudVisionSettings
 import com.pixel9.signalsurvey.vision.VisualDetection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,6 +98,17 @@ data class SurveyUiState(
     /** Null until enough clean magnetometer samples have accumulated along the sweep. */
     val heading: HeadingSolution? = null,
     val needsCompassCalibration: Boolean = false,
+    val cloud: CloudUiState = CloudUiState(),
+)
+
+/** Mirrors [CloudVisionSettings] for the UI. The key itself never enters this state. */
+data class CloudUiState(
+    val enabled: Boolean = false,
+    val hasApiKey: Boolean = false,
+    val disclosureAccepted: Boolean = false,
+    val maskedKey: String? = null,
+    val unavailableReason: String? = null,
+    val settingsOpen: Boolean = false,
 )
 
 class SurveyViewModel(app: Application) : AndroidViewModel(app) {
@@ -116,7 +129,9 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
     private val fusion = FusionEngine { profileId ->
         radioHub.capabilities.unavailabilityReason(profileId)
     }
-    private val orchestrator = CaptureOrchestrator(radioHub, stillClassifier, fusion)
+    val cloudSettings = CloudVisionSettings(app)
+    private val enricher = CloudVisionEnricher(cloudSettings)
+    private val orchestrator = CaptureOrchestrator(radioHub, stillClassifier, fusion, enricher)
 
     // --- state -----------------------------------------------------------------
 
@@ -143,8 +158,51 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
      */
     @Volatile private var cachedLocation: com.pixel9.signalsurvey.model.GeoFix? = null
 
+    // --- cloud enrichment (opt-in) ---------------------------------------------
+
+    private fun cloudState(settingsOpen: Boolean = _uiState.value.cloud.settingsOpen) =
+        CloudUiState(
+            enabled = cloudSettings.isEnabled,
+            hasApiKey = cloudSettings.hasApiKey,
+            disclosureAccepted = cloudSettings.disclosureAccepted,
+            maskedKey = cloudSettings.maskedKey(),
+            unavailableReason = cloudSettings.unavailableReason,
+            settingsOpen = settingsOpen,
+        )
+
+    fun openCloudSettings() { _uiState.value = _uiState.value.copy(cloud = cloudState(true)) }
+    fun closeCloudSettings() { _uiState.value = _uiState.value.copy(cloud = cloudState(false)) }
+
+    fun acceptCloudDisclosure() {
+        cloudSettings.acceptDisclosure()
+        _uiState.value = _uiState.value.copy(cloud = cloudState())
+    }
+
+    fun setCloudApiKey(key: String) {
+        cloudSettings.setApiKey(key)
+        enricher.invalidate()
+        _uiState.value = _uiState.value.copy(cloud = cloudState())
+    }
+
+    /** Returns false when the preconditions (disclosure, key, secure storage) are unmet. */
+    fun setCloudEnabled(enabled: Boolean): Boolean {
+        val accepted = cloudSettings.setEnabled(enabled)
+        enricher.invalidate()
+        _uiState.value = _uiState.value.copy(cloud = cloudState())
+        return accepted
+    }
+
+    fun forgetCloudKey() {
+        cloudSettings.forget()
+        enricher.invalidate()
+        _uiState.value = _uiState.value.copy(cloud = cloudState())
+    }
+
     init {
-        _uiState.value = _uiState.value.copy(hasClassifierModel = detector.hasCustomModel)
+        _uiState.value = _uiState.value.copy(
+            hasClassifierModel = detector.hasCustomModel,
+            cloud = cloudState(),
+        )
         viewModelScope.launch {
             radioHub.summary.collect { summary ->
                 _uiState.value = _uiState.value.copy(summary = summary)
@@ -266,6 +324,11 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
                 allocateTargetId = { active.allocateTargetId() },
                 onRttFixes = { active.addRttFixes(it) },
             ).collect { progress ->
+                if (progress is CaptureProgress.Note) {
+                    // A degraded optional step, not a failed capture — surface it and carry on.
+                    _uiState.value = _uiState.value.copy(message = progress.message)
+                    return@collect
+                }
                 _uiState.value = _uiState.value.copy(capture = progress)
                 if (progress is CaptureProgress.Complete) {
                     active.addShot(progress.shot)

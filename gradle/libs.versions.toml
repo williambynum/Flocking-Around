@@ -21,6 +21,11 @@ mlkitObjectDetectionCustom = "17.0.2"
 # Laptop, Printer...). On-device, no training, no network.
 mlkitImageLabeling = "17.0.9"
 
+# Optional cloud enrichment. Off by default; nothing leaves the device unless the
+# operator turns it on and supplies their own API key.
+anthropicJava = "2.54.0"
+securityCrypto = "1.1.0-alpha06"
+
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
@@ -45,6 +50,8 @@ arcore = { module = "com.google.ar:core", version.ref = "arcore" }
 mlkit-objectdetection = { module = "com.google.mlkit:object-detection", version.ref = "mlkitObjectDetection" }
 mlkit-objectdetection-custom = { module = "com.google.mlkit:object-detection-custom", version.ref = "mlkitObjectDetectionCustom" }
 mlkit-imagelabeling = { module = "com.google.mlkit:image-labeling", version.ref = "mlkitImageLabeling" }
+anthropic-java = { module = "com.anthropic:anthropic-java", version.ref = "anthropicJava" }
+androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
 

@@ -4,12 +4,15 @@ import android.graphics.Bitmap
 import com.pixel9.signalsurvey.ar.FrozenMetadata
 import com.pixel9.signalsurvey.fusion.FusionEngine
 import com.pixel9.signalsurvey.fusion.FusionRequest
+import com.pixel9.signalsurvey.model.IdentificationSource
 import com.pixel9.signalsurvey.model.RangeSource
 import com.pixel9.signalsurvey.model.Shot
 import com.pixel9.signalsurvey.model.Vec3
 import com.pixel9.signalsurvey.model.VisualTarget
 import com.pixel9.signalsurvey.radio.RadioHub
 import com.pixel9.signalsurvey.vision.StillImageClassifier
+import com.pixel9.signalsurvey.vision.cloud.CloudVisionEnricher
+import com.pixel9.signalsurvey.vision.cloud.EnrichmentOutcome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -22,6 +25,8 @@ sealed interface CaptureProgress {
     /** Pixels are frozen and on screen. Emitted immediately so the shutter feels instant. */
     data class Frozen(val bitmap: Bitmap) : CaptureProgress
     data class Listening(val elapsedMs: Long, val totalMs: Long, val heard: Int) : CaptureProgress
+    /** Non-fatal information the operator should see — a degraded optional step, typically. */
+    data class Note(val message: String) : CaptureProgress
     data class Complete(val shot: Shot, val bitmap: Bitmap) : CaptureProgress
     data class Failed(val reason: String) : CaptureProgress
 }
@@ -41,6 +46,7 @@ class CaptureOrchestrator(
     private val radioHub: RadioHub,
     private val classifier: StillImageClassifier,
     private val fusion: FusionEngine,
+    private val enricher: CloudVisionEnricher,
 ) {
 
     fun capture(
@@ -116,7 +122,24 @@ class CaptureOrchestrator(
             } ?: obs
         }
 
-        val detections = visionJob.await()
+        var detections = visionJob.await()
+
+        // Optional cloud identification. Runs only when the operator turned it on and supplied
+        // a key; enricher returns Disabled otherwise and nothing is uploaded. It happens after
+        // the local pass so a network failure degrades to on-device labels rather than to
+        // nothing, and the shot is already frozen so the wait is not on the shutter path.
+        if (detections.isNotEmpty()) {
+            when (val outcome = enricher.enrich(bitmap, detections)) {
+                is EnrichmentOutcome.Enriched -> {
+                    detections = outcome.detections
+                    send(CaptureProgress.Listening(LISTEN_WINDOW_MS, LISTEN_WINDOW_MS,
+                        radioHub.currentObservations().size))
+                }
+                is EnrichmentOutcome.Failed ->
+                    send(CaptureProgress.Note("Cloud identification: ${outcome.reason}"))
+                EnrichmentOutcome.Disabled -> Unit
+            }
+        }
 
         val targets: List<VisualTarget> = withContext(Dispatchers.Default) {
             detections.map { detection ->
@@ -154,6 +177,12 @@ class CaptureOrchestrator(
                         camera = metadata.camera,
                         shotIndex = shotIndex,
                         displayNameOverride = detection.displayNameOverride,
+                        identification = when {
+                            detection.identifiedByCloud -> IdentificationSource.CLOUD_VISION
+                            classifier.hasCustomModel -> IdentificationSource.ON_DEVICE_CLASSIFIER
+                            detection.rawLabel != null -> IdentificationSource.ON_DEVICE_GENERIC
+                            else -> IdentificationSource.NONE
+                        },
                     ),
                     observations,
                 )

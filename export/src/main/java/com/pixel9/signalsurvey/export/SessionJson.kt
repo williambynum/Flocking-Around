@@ -131,6 +131,12 @@ object SessionJson {
         put("label", label)
         put("displayName", displayName)
         put("visualConfidence", round(visualConfidence))
+        put("identification", JSONObject().apply {
+            put("source", identification.name)
+            put("label", identification.label)
+            // The distinction a reader needs: was an image uploaded to produce this name?
+            put("onDevice", identification.onDevice)
+        })
         put("boxPx", JSONArray(listOf(boxImagePx.left, boxImagePx.top, boxImagePx.right, boxImagePx.bottom)))
         put("anchorWorld", anchorWorld.toJson())
         put("range", JSONObject().apply {

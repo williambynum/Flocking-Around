@@ -22,6 +22,12 @@ data class VisualDetection(
     val displayNameOverride: String? = null,
     /** The labeller's own wording, kept so the identification stays auditable in the export. */
     val rawLabel: String? = null,
+    /**
+     * True when a remote vision model supplied this identity rather than an on-device model.
+     * Carried through to the annotations and the export: a reader deserves to know that one
+     * label came off the device and another did not.
+     */
+    val identifiedByCloud: Boolean = false,
 )
 
 /**

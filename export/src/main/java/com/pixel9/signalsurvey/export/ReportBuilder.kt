@@ -82,6 +82,17 @@ object ReportBuilder {
         sb.append("this type usually emits. Each one carries the reason it could not be ")
         sb.append("confirmed &mdash; usually that this phone has no receiver for it.</p>\n")
         sb.append("<p class=\"note\">").append(esc(CAPABILITY_NOTE)).append("</p>\n")
+
+        val cloudUsed = session.shots.any { shot ->
+            shot.targets.any { !it.identification.onDevice }
+        }
+        if (cloudUsed) {
+            sb.append("<p><span class=\"pill cloud\">cloud</span> ")
+            sb.append("This device was named by a remote vision model, which means an image ")
+            sb.append("of it was uploaded. Everything not carrying this badge was identified ")
+            sb.append("entirely on the device. No RF data, addresses or location were ever ")
+            sb.append("uploaded.</p>\n")
+        }
         sb.append("</section>\n")
 
         if (embeddingTruncated) {
@@ -238,8 +249,14 @@ object ReportBuilder {
     private fun appendTargetCard(sb: StringBuilder, target: VisualTarget) {
         sb.append("<div class=\"card\">\n")
         sb.append("<h3>").append(esc(target.displayName)).append("</h3>\n")
-        sb.append("<p class=\"meta\">visual match ")
-            .append((target.visualConfidence * 100).toInt()).append("%")
+        sb.append("<p class=\"meta\">")
+        if (!target.identification.onDevice) {
+            // An uploaded-image identification is a materially different claim from an
+            // on-device one, and the badge is how a reader tells them apart at a glance.
+            sb.append("<span class=\"pill cloud\">cloud</span> ")
+        }
+        sb.append("visual match ").append((target.visualConfidence * 100).toInt()).append("%")
+        sb.append(" &middot; ").append(esc(target.identification.label))
         target.rangeM?.let {
             sb.append(" &middot; ")
             if (target.rangeSource.isMeasured) {
@@ -354,6 +371,7 @@ object ReportBuilder {
         val sb = StringBuilder(16 * 1024)
         sb.appendRow(
             "shot", "target_id", "device_class", "device_name", "visual_confidence",
+            "identified_by", "identified_on_device",
             "range_m", "range_source", "range_is_measured", "bearing_deg", "elevation_deg",
             "world_x_m", "world_y_m", "world_z_m",
             "claim_status", "signal_standard", "signal_family", "signal_band",
@@ -368,6 +386,8 @@ object ReportBuilder {
                     t.label,
                     t.displayName,
                     "%.2f".format(t.visualConfidence),
+                    t.identification.label,
+                    if (t.identification.onDevice) "yes" else "no",
                     t.rangeM?.let { "%.2f".format(it) } ?: "",
                     t.rangeSource.shortLabel,
                     if (t.rangeSource.isMeasured) "yes" else "no",
@@ -476,7 +496,10 @@ object ReportBuilder {
             }
             shot.targets.forEach { t ->
                 sb.append("  ").append(t.displayName)
-                    .append("  (").append((t.visualConfidence * 100).toInt()).append("% visual)\n")
+                    .append("  (").append((t.visualConfidence * 100).toInt()).append("% visual")
+                    .append(if (t.identification.onDevice) ")" else ", CLOUD-IDENTIFIED)")
+                    .append('\n')
+                sb.append("    named by : ").append(t.identification.label).append('\n')
                 t.rangeM?.let {
                     sb.append("    distance : ")
                     if (t.rangeSource.isMeasured) sb.append("%.1f m  [%s]".format(it, t.rangeSource.shortLabel))
@@ -646,6 +669,8 @@ object ReportBuilder {
                          border: 1px solid rgba(127,212,168,0.35); }
         .pill.inferred { background: rgba(139,148,160,0.14); color: var(--inferred);
                          border: 1px dashed rgba(139,148,160,0.5); }
+        .pill.cloud { background: rgba(255,166,92,0.16); color: #ffa65c;
+                      border: 1px solid rgba(255,166,92,0.4); }
 
         img { max-width: 100%; height: auto; border-radius: 10px;
               border: 1px solid var(--line); display: block; }

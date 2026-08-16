@@ -21,7 +21,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Required, not cosmetic. The Anthropic SDK pulls in Jackson, which is enormous
+            // and almost entirely unused here — unminified it adds ~28 MB of dex. R8 strips it
+            // back down. The SDK, ML Kit and ARCore all ship their own keep rules.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

@@ -93,10 +93,34 @@ data class VisualTarget(
     val inferred: List<InferredSignal> = emptyList(),
     /** Shot indices this target has been seen in. */
     val seenInShots: List<Int> = emptyList(),
+    /** Where the name came from. Surfaced everywhere the name is. */
+    val identification: IdentificationSource = IdentificationSource.NONE,
 ) {
     val anchorCenterPx get() = android.graphics.PointF(
         boxImagePx.exactCenterX(), boxImagePx.exactCenterY()
     )
+}
+
+/**
+ * How a device got its name.
+ *
+ * The app already separates measured signals from inferred ones; identification deserves the
+ * same treatment. A name that came from a remote model is a different kind of claim from one
+ * an on-device classifier produced — it was better informed, and it left the device to get
+ * that way. Both facts belong on the record.
+ */
+enum class IdentificationSource(val label: String, val onDevice: Boolean) {
+    /** Nothing recognised it. */
+    NONE("unidentified", true),
+
+    /** ML Kit's generic labeller — a category, not a product. */
+    ON_DEVICE_GENERIC("on-device, generic labeller", true),
+
+    /** A bundled TFLite classifier trained on RF-relevant device classes. */
+    ON_DEVICE_CLASSIFIER("on-device classifier", true),
+
+    /** A remote vision model. The image was uploaded to produce this. */
+    CLOUD_VISION("cloud vision model (image uploaded)", false),
 }
 
 /**

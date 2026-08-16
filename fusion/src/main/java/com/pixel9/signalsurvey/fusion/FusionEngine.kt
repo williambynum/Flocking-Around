@@ -4,6 +4,7 @@ import android.graphics.Rect
 import com.pixel9.signalsurvey.model.CameraSnapshot
 import com.pixel9.signalsurvey.model.ConfirmedSignal
 import com.pixel9.signalsurvey.model.DeviceOntology
+import com.pixel9.signalsurvey.model.IdentificationSource
 import com.pixel9.signalsurvey.model.InferredSignal
 import com.pixel9.signalsurvey.model.Observability
 import com.pixel9.signalsurvey.model.RadioObservation
@@ -27,6 +28,7 @@ data class FusionRequest(
     val shotIndex: Int,
     /** From the generic labeller when the ontology has no entry for [label]. */
     val displayNameOverride: String? = null,
+    val identification: IdentificationSource = IdentificationSource.NONE,
 )
 
 /**
@@ -72,6 +74,7 @@ class FusionEngine(
                 bearingDeg = geometry.bearingDeg,
                 elevationDeg = geometry.elevationDeg,
                 seenInShots = listOf(request.shotIndex),
+                identification = request.identification,
             )
         }
 
@@ -112,6 +115,7 @@ class FusionEngine(
             confirmed = confirmed,
             inferred = inferred,
             seenInShots = listOf(request.shotIndex),
+            identification = request.identification,
         )
     }
 

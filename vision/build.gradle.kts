@@ -19,6 +19,10 @@ dependencies {
     implementation(libs.mlkit.objectdetection)
     implementation(libs.mlkit.objectdetection.custom)
     implementation(libs.mlkit.imagelabeling)
+
+    // Cloud enrichment — used only when the operator opts in at runtime.
+    implementation(libs.anthropic.java)
+    implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
 }
