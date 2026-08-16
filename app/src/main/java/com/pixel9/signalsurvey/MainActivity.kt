@@ -22,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,6 +64,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SignalSurveyTheme {
+                KeepScreenOn()
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
 
                 when {
@@ -99,6 +102,27 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         viewModel.onPause()
+    }
+}
+
+/**
+ * Holds the display awake for as long as the app is in the foreground.
+ *
+ * A survey is a slow, two-handed job — sweep the room, walk to a new position, sweep again —
+ * and long stretches of it involve no touching of the screen at all. Letting the display time
+ * out mid-sweep does not merely annoy: the ARCore session pauses with it, so tracking, the
+ * accumulated depth, and the world frame every shot is anchored to are all lost.
+ *
+ * Uses the View flag rather than a WakeLock: it needs no permission, is scoped to this view
+ * being attached and visible, and Android drops it automatically when the app backgrounds —
+ * so it cannot leak and flatten the battery from the background.
+ */
+@Composable
+private fun KeepScreenOn() {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
     }
 }
 
