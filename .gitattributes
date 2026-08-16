@@ -1,0 +1,22 @@
+# Normalise line endings in the repo; check out native on each platform.
+* text=auto
+
+*.kt      text diff=kotlin
+*.kts     text diff=kotlin
+*.java    text diff=java
+*.xml     text
+*.toml    text
+*.md      text
+*.pro     text
+*.properties text
+
+# gradlew must stay LF or it will not run on macOS/Linux.
+gradlew   text eol=lf
+*.bat     text eol=crlf
+
+*.jar     binary
+*.apk     binary
+*.aab     binary
+*.tflite  binary
+*.png     binary
+*.jpg     binary

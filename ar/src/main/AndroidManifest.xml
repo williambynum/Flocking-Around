@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- ARCore is mandatory: the whole app is built on a shared world coordinate frame. -->
+    <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
+
+    <application>
+        <meta-data android:name="com.google.ar.core" android:value="required" />
+    </application>
+</manifest>
