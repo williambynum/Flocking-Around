@@ -42,12 +42,36 @@ object Trilateration {
     fun solveFromRtt(fixes: List<RttFix>): PositionSolution? {
         val usable = dedupeByPosition(fixes.map { it.cameraWorld to it.distanceM })
         if (usable.size < 3) return null
-        if (baseline(usable.map { it.first }) < MIN_BASELINE_M) return null
+        val positions = usable.map { it.first }
+        if (baseline(positions) < MIN_BASELINE_M) return null
+        // A walk along a straight line cannot say which side of that line the emitter is on:
+        // both mirror images fit every range equally. Publishing either would be a coin flip
+        // presented as a measurement, so there is no solution until the path bends.
+        if (crossTrackSpread(positions) < MIN_CROSS_TRACK_M) return null
 
-        val planar = !hasVerticalSpread(usable.map { it.first }) || usable.size < 4
+        val planar = !hasVerticalSpread(positions) || usable.size < 4
         val seed = linearLeastSquares(usable, planar) ?: centroidSeed(usable)
-        val refined = gaussNewton(usable, seed, planar)
 
+        if (planar) {
+            // A level walk cannot see height, but height still shapes every range: an access
+            // point on the ceiling is further away than its plan distance. Fitting the vertical
+            // offset as a nuisance term keeps the plan position unbiased and the residual
+            // honest. It needs a fourth measurement, otherwise three unknowns would fit three
+            // ranges exactly and the residual would read zero no matter how bad the data was.
+            val height = if (usable.size >= 4) heightOffsetSeed(usable, seed) else 0f
+            if (height > 0f) {
+                val (refined, offset) = gaussNewtonWithHeight(usable, seed, height)
+                return PositionSolution(
+                    // Above or below is a mirror ambiguity, so the point stays at walk height.
+                    position = refined,
+                    residualM = rmsResidual(usable, refined, offset),
+                    usedMeasurements = usable.size,
+                    planarOnly = true,
+                )
+            }
+        }
+
+        val refined = gaussNewton(usable, seed, planar)
         return PositionSolution(
             position = refined,
             residualM = rmsResidual(usable, refined),
@@ -225,6 +249,56 @@ object Trilateration {
         return x
     }
 
+    /**
+     * First estimate of how far above or below the walk the emitter sits, from the plan
+     * position the linear solve produced. Zero when the ranges do not call for one.
+     */
+    private fun heightOffsetSeed(measurements: List<Pair<Vec3, Float>>, plan: Vec3): Float {
+        var sum = 0.0
+        measurements.forEach { (p, r) ->
+            val planar = plan.planarDistanceTo(p).toDouble()
+            sum += r.toDouble() * r - planar * planar
+        }
+        val meanSq = sum / measurements.size
+        return if (meanSq > MIN_HEIGHT_OFFSET_M * MIN_HEIGHT_OFFSET_M) sqrt(meanSq).toFloat() else 0f
+    }
+
+    /**
+     * Gauss-Newton over plan position plus an unsigned vertical offset. The measurement
+     * positions are taken as level, which is what [hasVerticalSpread] has already established.
+     */
+    private fun gaussNewtonWithHeight(
+        measurements: List<Pair<Vec3, Float>>,
+        seed: Vec3,
+        seedHeight: Float,
+    ): Pair<Vec3, Float> {
+        var x = seed
+        var h = seedHeight
+        repeat(10) {
+            val jtj = Array(3) { DoubleArray(3) }
+            val jtr = DoubleArray(3)
+
+            measurements.forEach { (p, r) ->
+                val dx = (x.x - p.x).toDouble()
+                val dz = (x.z - p.z).toDouble()
+                val d = sqrt(dx * dx + dz * dz + h.toDouble() * h).coerceAtLeast(0.05)
+                val residual = d - r
+                val grad = doubleArrayOf(dx / d, dz / d, h / d)
+                for (a in 0 until 3) {
+                    for (b in 0 until 3) jtj[a][b] += grad[a] * grad[b]
+                    jtr[a] += grad[a] * residual
+                }
+            }
+            for (a in 0 until 3) jtj[a][a] *= 1.05
+
+            val delta = solveSymmetric(jtj, jtr, 3) ?: return x to h
+            x = Vec3(x.x - delta[0].toFloat(), x.y, x.z - delta[1].toFloat())
+            // Unsigned by construction, and kept off zero where its gradient vanishes.
+            h = abs(h - delta[2].toFloat()).coerceAtLeast(0.01f)
+        }
+        return x to h
+    }
+
     /** Gaussian elimination with partial pivoting for a 2x2 or 3x3 system. */
     private fun solveSymmetric(a: Array<DoubleArray>, b: DoubleArray, n: Int): DoubleArray? {
         val m = Array(n) { r -> DoubleArray(n + 1) { c -> if (c < n) a[r][c] else b[r] } }
@@ -244,10 +318,19 @@ object Trilateration {
         return DoubleArray(n) { m[it][n] / m[it][it] }
     }
 
-    private fun rmsResidual(measurements: List<Pair<Vec3, Float>>, x: Vec3): Float {
+    private fun rmsResidual(
+        measurements: List<Pair<Vec3, Float>>,
+        x: Vec3,
+        heightOffsetM: Float = 0f,
+    ): Float {
         var sum = 0.0
         measurements.forEach { (p, r) ->
-            val e = (x.distanceTo(p) - r).toDouble()
+            val e = if (heightOffsetM > 0f) {
+                val planar = x.planarDistanceTo(p).toDouble()
+                sqrt(planar * planar + heightOffsetM.toDouble() * heightOffsetM) - r
+            } else {
+                (x.distanceTo(p) - r).toDouble()
+            }
             sum += e * e
         }
         return sqrt(sum / measurements.size).toFloat()
@@ -283,6 +366,28 @@ object Trilateration {
         return max
     }
 
+    /**
+     * How far the positions stray, in plan, from the best straight line through them: the
+     * largest perpendicular distance from the principal axis. Near zero means the walk was a
+     * line, and a line cannot resolve which side an emitter is on.
+     */
+    private fun crossTrackSpread(positions: List<Vec3>): Float {
+        if (positions.size < 3) return 0f
+        val centre = Vec3.centroid(positions)
+        var sxx = 0.0; var szz = 0.0; var sxz = 0.0
+        positions.forEach { p ->
+            val dx = (p.x - centre.x).toDouble()
+            val dz = (p.z - centre.z).toDouble()
+            sxx += dx * dx; szz += dz * dz; sxz += dx * dz
+        }
+        // Principal axis of the 2x2 scatter matrix.
+        val angle = 0.5 * Math.atan2(2.0 * sxz, sxx - szz)
+        val ax = Math.cos(angle); val az = Math.sin(angle)
+        return positions.maxOf { p ->
+            abs((p.x - centre.x) * -az + (p.z - centre.z) * ax)
+        }.toFloat()
+    }
+
     /** Handheld surveys are almost planar; without vertical spread a 3D solve is fiction. */
     private fun hasVerticalSpread(positions: List<Vec3>): Boolean {
         val ys = positions.map { it.y }
@@ -291,6 +396,13 @@ object Trilateration {
 
     private fun Float.pow(exp: Float): Float = Math.pow(this.toDouble(), exp.toDouble()).toFloat()
 
+    /**
+     * Minimum sideways departure from a straight line. ARCore pose jitter is centimetres, so
+     * this is far above noise while still being met by one sidestep.
+     */
+    private const val MIN_CROSS_TRACK_M = 0.3f
+    /** Below this a vertical offset is indistinguishable from ranging noise. */
+    private const val MIN_HEIGHT_OFFSET_M = 0.3f
     private const val MIN_RSSI_SAMPLES = 8
     private const val MIN_RSSI_BASELINE_M = 1.5f
     private const val GRID_STEPS = 8

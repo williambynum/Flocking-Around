@@ -266,7 +266,15 @@ Known gaps worth attention before field use:
 - **BLE address rotation** (~15 min) means long sessions can split one tracker into several
   entries. `RadioObservation.fingerprint` exists for this; the session merger does not use
   it yet.
-- **Trilateration accuracy** is untested against ground truth on real hardware.
+- **Trilateration accuracy** is untested against ground truth on real hardware. The solvers
+  are covered against synthetic ground truth on the JVM (`./gradlew :fusion:testDebugUnitTest`),
+  which checks the arithmetic and the refusal cases, not how real RTT behaves in a real room.
+- **A straight-line walk locates nothing by RTT.** Ranges taken along a line fit two mirror-image
+  points equally well, so the solver refuses until the path bends by about 0.3 m. The live
+  "locatable" count does not know this yet and can over-promise in a corridor.
+- **Emitter height is not resolved from a level walk.** The vertical offset is fitted so the plan
+  position stays unbiased, but above-versus-below is ambiguous, so the point is reported at
+  walk height. A ceiling AP is right on the plan view and drawn too low on the photographs.
 - **Heading outdoors** could be much better with ARCore Geospatial — see below.
 
 ---
