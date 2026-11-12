@@ -36,10 +36,14 @@ import com.pixel9.signalsurvey.vision.StillImageClassifier
 import com.pixel9.signalsurvey.vision.cloud.CloudVisionEnricher
 import com.pixel9.signalsurvey.vision.cloud.CloudVisionSettings
 import com.pixel9.signalsurvey.vision.VisualDetection
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
@@ -85,6 +89,8 @@ data class Readiness(
 data class SurveyUiState(
     val phase: SurveyPhase = SurveyPhase.IDLE,
     val message: String? = null,
+    /** True when [message] reports something that went wrong rather than a status. */
+    val messageIsError: Boolean = false,
     val readiness: Readiness = Readiness(false, 0f, 0f, 0),
     val summary: RadioSummary = RadioSummary.EMPTY,
     val liveBoxes: List<LiveBox> = emptyList(),
@@ -142,6 +148,7 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
     private val annotatedShots = HashMap<Int, Bitmap>()
 
     private val captureRequested = AtomicBoolean(false)
+    private val exporting = AtomicBoolean(false)
     @Volatile private var pendingMetadata: FrozenMetadata? = null
     @Volatile private var sensorOrientation: Int = 90
     @Volatile private var lastDepthCoverage: Float = 0f
@@ -170,54 +177,84 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
             settingsOpen = settingsOpen,
         )
 
-    fun openCloudSettings() { _uiState.value = _uiState.value.copy(cloud = cloudState(true)) }
-    fun closeCloudSettings() { _uiState.value = _uiState.value.copy(cloud = cloudState(false)) }
+    fun openCloudSettings() { _uiState.update { it.copy(cloud = cloudState(true)) } }
+    fun closeCloudSettings() { _uiState.update { it.copy(cloud = cloudState(false)) } }
 
     fun acceptCloudDisclosure() {
         cloudSettings.acceptDisclosure()
-        _uiState.value = _uiState.value.copy(cloud = cloudState())
+        _uiState.update { it.copy(cloud = cloudState()) }
     }
 
     fun setCloudApiKey(key: String) {
         cloudSettings.setApiKey(key)
         enricher.invalidate()
-        _uiState.value = _uiState.value.copy(cloud = cloudState())
+        _uiState.update { it.copy(cloud = cloudState()) }
     }
 
     /** Returns false when the preconditions (disclosure, key, secure storage) are unmet. */
     fun setCloudEnabled(enabled: Boolean): Boolean {
         val accepted = cloudSettings.setEnabled(enabled)
         enricher.invalidate()
-        _uiState.value = _uiState.value.copy(cloud = cloudState())
+        _uiState.update { it.copy(cloud = cloudState()) }
         return accepted
     }
 
     fun forgetCloudKey() {
         cloudSettings.forget()
         enricher.invalidate()
-        _uiState.value = _uiState.value.copy(cloud = cloudState())
+        _uiState.update { it.copy(cloud = cloudState()) }
     }
 
     init {
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { it.copy(
             hasClassifierModel = detector.hasCustomModel,
             cloud = cloudState(),
-        )
+        ) }
         viewModelScope.launch {
             radioHub.summary.collect { summary ->
-                _uiState.value = _uiState.value.copy(summary = summary)
+                _uiState.update { it.copy(summary = summary) }
             }
         }
         viewModelScope.launch {
             while (true) {
                 cachedLocation = radioHub.gnss.lastKnownLocation()
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     heading = heading.solution(),
                     needsCompassCalibration = heading.needsCalibration,
-                )
+                ) }
                 kotlinx.coroutines.delay(LOCATION_REFRESH_MS)
             }
         }
+    }
+
+    // --- transient notices -----------------------------------------------------
+
+    private var noticeJob: Job? = null
+
+    /**
+     * Show a message in the HUD and take it down again after a few seconds.
+     *
+     * Capture failures used to be handed to the capture panel, which is only on screen while
+     * a capture is running — so the reason vanished in the same frame it arrived and the
+     * shutter simply appeared to do nothing.
+     */
+    private fun showNotice(text: String, isError: Boolean = false) {
+        _uiState.update { it.copy(message = text, messageIsError = isError) }
+        noticeJob?.cancel()
+        noticeJob = viewModelScope.launch {
+            delay(if (isError) ERROR_NOTICE_MS else NOTICE_MS)
+            _uiState.update {
+                if (it.message == text) it.copy(message = null, messageIsError = false) else it
+            }
+        }
+    }
+
+    /** Abandon a capture: back to arming, with the reason where the operator can read it. */
+    private fun failCapture(reason: String) {
+        captureRequested.set(false)
+        pendingMetadata = null
+        _uiState.update { it.copy(phase = SurveyPhase.ARMING, capture = null) }
+        showNotice(reason, isError = true)
     }
 
     // --- lifecycle -------------------------------------------------------------
@@ -225,15 +262,15 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
     fun onResume(activity: Activity, userRequestedInstall: Boolean): Boolean {
         if (!arController.createSession(activity, userRequestedInstall)) {
             arController.lastFailure?.let { failure ->
-                _uiState.value = _uiState.value.copy(phase = SurveyPhase.ERROR, message = failure)
+                _uiState.update { it.copy(phase = SurveyPhase.ERROR, message = failure) }
             }
             return false
         }
         if (!arController.resume()) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 phase = SurveyPhase.ERROR,
                 message = arController.lastFailure ?: "Could not start the AR session",
-            )
+            ) }
             return false
         }
         readSensorOrientation(activity)
@@ -277,15 +314,17 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
         // whenever the AR session restarts, so carrying the old offset over would be wrong.
         heading.reset()
         builder = SurveySessionBuilder(label, radioHub.capabilities.describe())
-        _uiState.value = _uiState.value.copy(
+        noticeJob?.cancel()
+        _uiState.update { it.copy(
             phase = SurveyPhase.ARMING,
             message = null,
+            messageIsError = false,
             shotCount = 0,
             session = null,
             planView = null,
             exportResult = null,
             capture = null,
-        )
+        ) }
     }
 
     /** Request a capture. Fulfilled on the next AR frame so the pixels match the metadata. */
@@ -295,51 +334,69 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
         if (!_uiState.value.readiness.ready) return
 
         captureRequested.set(true)
-        _uiState.value = _uiState.value.copy(phase = SurveyPhase.CAPTURING)
+        _uiState.update { it.copy(phase = SurveyPhase.CAPTURING) }
 
         viewModelScope.launch {
             // Wait for the GL thread to hand back metadata for a tracked frame.
             val metadata = awaitMetadata() ?: run {
-                _uiState.value = _uiState.value.copy(
-                    phase = SurveyPhase.ARMING,
-                    capture = CaptureProgress.Failed("Tracking was lost - hold steadier"),
-                )
+                failCapture("Tracking was lost - hold steadier and try again")
                 return@launch
             }
 
             val bitmap = capturer.copyPixels(surfaceView) ?: run {
-                _uiState.value = _uiState.value.copy(
-                    phase = SurveyPhase.ARMING,
-                    capture = CaptureProgress.Failed("Could not read the camera surface"),
-                )
+                failCapture("Could not read the camera surface - try again")
                 return@launch
             }
 
             val shotIndex = active.shotCount + 1
-            orchestrator.capture(
-                shotIndex = shotIndex,
-                elapsedMs = active.elapsedMs(),
-                bitmap = bitmap,
-                metadata = metadata,
-                allocateTargetId = { active.allocateTargetId() },
-                onRttFixes = { active.addRttFixes(it) },
-            ).collect { progress ->
-                if (progress is CaptureProgress.Note) {
-                    // A degraded optional step, not a failed capture — surface it and carry on.
-                    _uiState.value = _uiState.value.copy(message = progress.message)
-                    return@collect
+            var completed = false
+            try {
+                orchestrator.capture(
+                    shotIndex = shotIndex,
+                    elapsedMs = active.elapsedMs(),
+                    bitmap = bitmap,
+                    metadata = metadata,
+                    allocateTargetId = { active.allocateTargetId() },
+                    onRttFixes = { active.addRttFixes(it) },
+                ).collect { progress ->
+                    when (progress) {
+                        // A degraded optional step, not a failed capture — surface it and
+                        // carry on.
+                        is CaptureProgress.Note -> showNotice(progress.message)
+
+                        is CaptureProgress.Complete -> {
+                            active.addShot(progress.shot)
+                            val stored = imageStore.put(active.id, progress.shot.index, progress.bitmap)
+                            completed = true
+                            // The panel must not keep a reference to pixels about to be freed.
+                            _uiState.update { it.copy(
+                                phase = SurveyPhase.ARMING,
+                                capture = null,
+                                shotCount = active.shotCount,
+                                trilaterationReady = active.trilaterationReadyCount(),
+                            ) }
+                            if (!stored) {
+                                showNotice(
+                                    "Shot ${progress.shot.index} was measured but its image " +
+                                        "could not be saved - storage may be full",
+                                    isError = true,
+                                )
+                            }
+                        }
+
+                        else -> _uiState.update { it.copy(capture = progress) }
+                    }
                 }
-                _uiState.value = _uiState.value.copy(capture = progress)
-                if (progress is CaptureProgress.Complete) {
-                    active.addShot(progress.shot)
-                    imageStore.put(active.id, progress.shot.index, progress.bitmap)
-                    progress.bitmap.recycle()
-                    _uiState.value = _uiState.value.copy(
-                        phase = SurveyPhase.ARMING,
-                        shotCount = active.shotCount,
-                        trilaterationReady = active.trilaterationReadyCount(),
-                    )
-                }
+                // The flow ending without a Complete would otherwise leave the phase stuck on
+                // CAPTURING with the shutter disabled for the rest of the session.
+                if (!completed) failCapture("Shot $shotIndex did not complete - try again")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Capture of shot $shotIndex failed", e)
+                failCapture("Shot $shotIndex failed: ${e.message ?: e.javaClass.simpleName}")
+            } finally {
+                if (!bitmap.isRecycled) bitmap.recycle()
             }
         }
     }
@@ -367,61 +424,98 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun finishSession() {
         val active = builder ?: return
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(phase = SurveyPhase.CAPTURING, message = "Resolving...")
+        // Guard against a double tap launching two resolutions over the same builder.
+        if (_uiState.value.phase != SurveyPhase.ARMING) return
+        noticeJob?.cancel()
+        _uiState.update { it.copy(
+            phase = SurveyPhase.CAPTURING,
+            capture = null,
+            message = "Resolving...",
+            messageIsError = false,
+        ) }
 
-            val session = withContext(Dispatchers.Default) {
-                active.finalise(
-                    observations = radioHub.observations.value,
-                    rssiSamples = radioHub.rssiSamples(),
-                    satellites = radioHub.satellites.value,
-                    location = radioHub.gnss.lastKnownLocation(),
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.Default) {
+                    active.finalise(
+                        observations = radioHub.observations.value,
+                        rssiSamples = radioHub.rssiSamples(),
+                        satellites = radioHub.satellites.value,
+                        location = radioHub.gnss.lastKnownLocation(),
+                    )
+                }
+
+                val unlocated = SessionResolver.unlocatedFor(session).take(24)
+                val rendered = withContext(Dispatchers.Default) {
+                    session.shots.mapNotNull { shot ->
+                        val base = imageStore.load(session.id, shot.index) ?: return@mapNotNull null
+                        val visible = SessionResolver.emittersVisibleIn(shot, session.emitters)
+                        val annotated = annotationRenderer.render(
+                            shot = shot,
+                            base = base,
+                            targets = shot.targets,
+                            visibleEmitters = visible,
+                            unlocated = unlocated,
+                            sessionLabel = session.label,
+                            satellites = session.satellites,
+                        )
+                        base.recycle()
+                        shot.index to annotated
+                    }.toMap()
+                }
+
+                annotatedShots.putAll(rendered)
+                val plan = withContext(Dispatchers.Default) { planRenderer.render(session) }
+
+                _uiState.update { it.copy(
+                    phase = SurveyPhase.SUMMARY,
+                    message = null,
+                    session = session,
+                    planView = plan,
+                ) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Without this the screen sat on "Resolving..." forever. The shots and radio
+                // log are still in the builder, so the operator can simply try again.
+                Log.e(TAG, "Could not resolve the session", e)
+                _uiState.update { it.copy(phase = SurveyPhase.ARMING, message = null) }
+                showNotice(
+                    "Could not resolve the survey: ${e.message ?: e.javaClass.simpleName}. " +
+                        "Your shots are kept - tap Finish to retry",
+                    isError = true,
                 )
             }
-
-            val rendered = withContext(Dispatchers.Default) {
-                session.shots.mapNotNull { shot ->
-                    val base = imageStore.load(session.id, shot.index) ?: return@mapNotNull null
-                    val visible = SessionResolver.emittersVisibleIn(shot, session.emitters)
-                    val annotated = annotationRenderer.render(
-                        shot = shot,
-                        base = base,
-                        targets = shot.targets,
-                        visibleEmitters = visible,
-                        unlocated = SessionResolver.unlocatedFor(session).take(24),
-                        sessionLabel = session.label,
-                        satellites = session.satellites,
-                    )
-                    base.recycle()
-                    shot.index to annotated
-                }.toMap()
-            }
-
-            annotatedShots.putAll(rendered)
-            val plan = withContext(Dispatchers.Default) { planRenderer.render(session) }
-
-            _uiState.value = _uiState.value.copy(
-                phase = SurveyPhase.SUMMARY,
-                message = null,
-                session = session,
-                planView = plan,
-            )
         }
     }
 
     fun exportSession() {
         val session = _uiState.value.session ?: return
+        if (exporting.getAndSet(true)) return
         viewModelScope.launch {
-            val result = exporter.export(session, annotatedShots, _uiState.value.planView)
-            _uiState.value = _uiState.value.copy(
-                exportResult = result,
-                message = buildString {
-                    append("Exported ").append(result.files.size).append(" files (")
-                    append("%.1f MB".format(result.totalBytes / 1_048_576f)).append(") to ")
-                    append(result.folderPath)
-                    if (result.usedFallback) append(" - Downloads was unavailable")
-                },
-            )
+            try {
+                val result = exporter.export(session, annotatedShots, _uiState.value.planView)
+                _uiState.update { it.copy(
+                    exportResult = result,
+                    message = buildString {
+                        append("Exported ").append(result.files.size).append(" files (")
+                        append("%.1f MB".format(result.totalBytes / 1_048_576f)).append(") to ")
+                        append(result.folderPath)
+                        if (result.usedFallback) append(" - Downloads was unavailable")
+                    },
+                    messageIsError = false,
+                ) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Export failed", e)
+                _uiState.update { it.copy(
+                    message = "Export failed: ${e.message ?: e.javaClass.simpleName}",
+                    messageIsError = true,
+                ) }
+            } finally {
+                exporting.set(false)
+            }
         }
     }
 
@@ -496,9 +590,9 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
         val rotation = RotationMapping.forBackCamera(displayRotation, sensorOrientation)
 
         detector.analyze(image, rotation) { detections ->
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 liveBoxes = detections.mapNotNull { it.toLiveBox(viewWidth, viewHeight) }
-            )
+            ) }
         }
     }
 
@@ -556,9 +650,10 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
             pathLengthM = active?.pathLengthM() ?: 0f,
             shotCount = active?.shotCount ?: 0,
         )
-        val current = _uiState.value
-        if (current.readiness != readiness) {
-            _uiState.value = current.copy(readiness = readiness)
+        // Called at frame rate from the GL thread: skip the write when nothing changed, and
+        // go through update {} so a concurrent main-thread write is never overwritten.
+        if (_uiState.value.readiness != readiness) {
+            _uiState.update { it.copy(readiness = readiness) }
         }
     }
 
@@ -594,6 +689,9 @@ class SurveyViewModel(app: Application) : AndroidViewModel(app) {
         const val TAG = "SurveyViewModel"
         const val INFERENCE_INTERVAL_MS = 120L
         const val LOCATION_REFRESH_MS = 3_000L
+        const val NOTICE_MS = 5_000L
+        /** Errors stay up longer: they usually need reading twice. */
+        const val ERROR_NOTICE_MS = 8_000L
         /** The readiness gauge does not need to be recomputed at frame rate. */
         const val DEPTH_SAMPLE_INTERVAL_MS = 500L
         /** Sampling every Nth depth pixel is plenty for a coverage percentage. */

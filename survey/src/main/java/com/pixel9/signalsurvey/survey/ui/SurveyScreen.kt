@@ -194,7 +194,12 @@ fun SurveyScreen(
                 if (state.cloud.enabled) Color(0xFFFFA65C) else Color(0xFF8B94A0),
                 onClick = { viewModel.openCloudSettings() },
             )
-            state.message?.let { HintChip(it, Color(0xFF7FD4A8)) }
+            state.message?.let { message ->
+                HintChip(
+                    message,
+                    if (state.messageIsError) Color(0xFFFF8B8B) else Color(0xFF7FD4A8),
+                )
+            }
         }
 
         // ---- capture progress ----
