@@ -22,11 +22,13 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -68,7 +70,32 @@ fun SessionSummaryScreen(
     val session = state.session ?: return
 
     var showPlan by remember { mutableStateOf(true) }
-    var selectedShot by remember { mutableIntStateOf(1) }
+    // Not hard-coded to 1: a shot whose image could not be stored is absent from the session.
+    var selectedShot by remember(session.id) {
+        mutableIntStateOf(session.shots.firstOrNull()?.index ?: 1)
+    }
+    var confirmDiscard by remember { mutableStateOf(false) }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard this survey?") },
+            text = {
+                Text(
+                    "It has not been exported. Starting a new survey deletes these " +
+                        "${session.shots.size} shots and every measurement taken with them."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmDiscard = false; onNewSurvey() }) {
+                    Text("Discard")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }) { Text("Keep") }
+            },
+        )
+    }
 
     Column(
         Modifier
@@ -156,6 +183,20 @@ fun SessionSummaryScreen(
             }
         }
 
+        if (state.messageIsError) {
+            state.message?.let { message ->
+                Text(
+                    message,
+                    color = Color(0xFFFF8B8B),
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF241416))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                )
+            }
+        }
+
         Row(
             Modifier
                 .fillMaxWidth()
@@ -174,7 +215,11 @@ fun SessionSummaryScreen(
                     fontWeight = FontWeight.Medium,
                 )
             }
-            OutlinedButton(onClick = onNewSurvey, modifier = Modifier.weight(1f)) {
+            OutlinedButton(
+                // An unexported survey exists only in memory; one stray tap must not erase it.
+                onClick = { if (state.exportResult == null) confirmDiscard = true else onNewSurvey() },
+                modifier = Modifier.weight(1f),
+            ) {
                 Text("New survey", color = Color.White)
             }
         }
